@@ -49,8 +49,8 @@ class Simulator:
         cos = 20+7.5*(np.cos(2*np.pi*t/2))
         # Parameters of the mixture components
         norm_params = np.array([[0, 1],
-                                [5, 1],
-                                [15, 1]])
+                                [1, 1],
+                                [5, 1]])
         #n_components = norm_params.shape[0]
         # Weight of each component, in this case all of them are 1/3
         weights = [0.949, 0.0499] #np.ones(n_components, dtype=np.float64) / 3.0
@@ -100,25 +100,38 @@ class Simulator:
         return best_season
 
 
-from matplotlib import pyplot as plt
 plt.style.use('seaborn')
 s = Simulator()
 t = s.generate_random_date_sequence("2013-12-12 14:52:35", "2019-09-12 12:56:04", 1500)
 T = s.generate_temps(1500)
-
-
-import pickle
-path = r"C:\Users\logiusti\Lorenzo\PyWorkspace\scripts\Wrapper\data\ups_to_temperature.pickle"
-
-with open(path, 'rb') as file:
-    ups2temp = pickle.load(file)
-
-df = ups2temp['EBS2C06_SLASH_BL1']
-
-"""
 df = pd.DataFrame()
-df['Time'] = t
-df['Temperature'] = T
+df['Time'] = t[:-3]
+#df['Value'] = T
+
+
+filtered_temperature = T
+dTemperature = np.gradient(filtered_temperature, edge_order=2)[:-3]
+energy_of_dTemperature = np.cumsum(dTemperature**2) #how much is changed the system over time
+signed_total_variation = np.cumsum(dTemperature**3) #how much is changed the system over time considering it's behavour
+dEnergy = np.gradient(energy_of_dTemperature, edge_order=2) #the speed in which the system is chagning
+dSTV = np.gradient(signed_total_variation, edge_order=2)
+
+df['T']    = filtered_temperature[:-3]
+df['dT']   = dTemperature
+df['EdT']  = energy_of_dTemperature
+df['STV']  = signed_total_variation
+df['EdE']  = dEnergy
+df['dSTV'] = dSTV
+df.index = pd.to_datetime(t[:-3], format="%Y.%m.%d %H:%M:%S.%f")
+
+
+plt.figure(figsize=(18,10))
+df.plot(subplots=True,  layout=(2,3), sharex=True, sharey=False, legend=False)
+[ax.legend(loc=1) for ax in plt.gcf().axes]
+plt.tight_layout()
+#plt.savefig(r'err1.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+plt.show()
+
 """
 
 df['season'] = s.automatic_seasonality_remover(df['Temperature'].values)
@@ -139,27 +152,4 @@ plt.tight_layout()
 #plt.savefig(r'err1.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
 plt.show()
 
-"""
-filtered_temperature = T
-dTemperature = np.gradient(filtered_temperature, edge_order=2)[:-2]
-energy_of_dTemperature = np.cumsum(dTemperature**2) #how much is changed the system over time
-signed_total_variation = np.cumsum(dTemperature**3) #how much is changed the system over time considering it's behavour
-dEnergy = np.gradient(energy_of_dTemperature, edge_order=2) #the speed in which the system is chagning
-dSTV = np.gradient(signed_total_variation, edge_order=2)
-
-df['T']    = filtered_temperature[:-2]
-df['dT']   = dTemperature
-df['EdT']  = energy_of_dTemperature
-df['STV']  = signed_total_variation
-df['EdE']  = dEnergy
-df['dSTV'] = dSTV
-df.index = pd.to_datetime(t[:-2], format="%Y.%m.%d %H:%M:%S.%f")
-
-
-plt.figure(figsize=(18,10))
-df.plot(subplots=True,  layout=(2,3), sharex=True, sharey=False, legend=False)
-[ax.legend(loc=1) for ax in plt.gcf().axes]
-plt.tight_layout()
-#plt.savefig(r'err1.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
-plt.show()
 """

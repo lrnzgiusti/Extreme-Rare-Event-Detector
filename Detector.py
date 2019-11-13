@@ -94,10 +94,10 @@ class Detector:
         return (X_train, X_test)
 
     def scheduler(self):
-        ups_to_functionals = self.loader.load_temperature_functionals()
+        ups_to_functionals_noisy, ups_to_functionals_clean,  = self.loader.load_temperature_functionals()
 
         i = 0
-        for ups in ups_to_functionals:
+        for ups in ups_to_functionals_noisy:
             i += 1
             if i % 20 == 0:
                 print(i)
@@ -106,16 +106,18 @@ class Detector:
             if not os.path.isdir(r'./data/anom/'+ups):
                 os.mkdir(r'./data/anom/'+ups)
 
-            X_train, X_test = self.load_and_scale(ups_to_functionals[ups])
-            md = self.mahalanobis_distances(X_train, X_test, ups)
+            #X_train, X_test = self.load_and_scale(ups_to_functionals[ups])
+            #md = self.mahalanobis_distances(X_train, X_test, ups)
 
-            X_train, X_test = self.load_and_scale(ups_to_functionals[ups])
-            autoenc = self.nonlinear_autoencoder_detect(X_train, X_test, ups)
-            LSTM_autoenc = self.nonlinear_LSTM_autoencoder_detect(X_train, X_test, ups)
+            X_train, X_test = self.load_and_scale(ups_to_functionals_noisy[ups])
+            Y_train, Y_test = self.load_and_scale(ups_to_functionals_clean[ups])
+
+            autoenc = self.nonlinear_autoencoder_detect(X_train, X_test, Y_train, Y_test, ups)
+            LSTM_autoenc = self.nonlinear_LSTM_autoencoder_detect(X_train, X_test, Y_train, Y_test, ups)
 
             fig, axes = plt.subplots(nrows=3)
 
-            md.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'], title='Mahalanobis Anomaly' ,ax=axes[0])
+            #md.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'], title='Mahalanobis Anomaly' ,ax=axes[0])
             autoenc.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'], title='Autoencoder Anomaly' , ax=axes[1])
             LSTM_autoenc.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'],  title='LSTM Autoencoder Anomaly',  ax=axes[2])
             plt.savefig(r'./data/anom/'+ups+'/merged.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
@@ -329,7 +331,7 @@ class Detector:
         return anomaly_alldata
 
 
-    def nonlinear_autoencoder_detect(self, X_train, X_test, ups):
+    def nonlinear_autoencoder_detect(self, X_train, X_test, Y_train, Y_test, ups):
         r'''
         The basic idea here is to use an autoencoder neural network to “compress” the sensor readings to a low dimensional representation,
         which captures the correlations and interactions between the various variables.
@@ -339,9 +341,14 @@ class Detector:
             First layer has 6 nodes, middle layer has 2 nodes, and third layer has 6 nodes.
         We use the mean square error as loss function, and train the model using the SGD optimizer with 0.8 as momentum value.
         '''
+        x_train = X_train.to_numpy()
+        y_train = Y_train.to_numpy()
 
-        train = X_train.to_numpy()
 
+        x_test = X_test.to_numpy()
+        y_test = Y_test.to_numpy()
+
+        """
         corrupted_train = train.copy()
 
 
@@ -350,23 +357,22 @@ class Detector:
 
         corrupted_train[random_rows_to_corrupt, random_cols_to_corrupt] = 0
 
-
-        act_func = LeakyReLU(alpha=0.01)
+        """
 
         # Input layer:
         model = Sequential()
         # First hidden layer, connected to input vector X.
-        model.add(Dense(6, activation=act_func,
+        model.add(Dense(6, activation='selu',
                         kernel_initializer='glorot_uniform',
                         input_shape=(X_train.shape[1],)))
 
 
 
-        model.add(Dense(2, activation=act_func,
+        model.add(Dense(2, activation='selu',
                         kernel_initializer='glorot_uniform'))
 
 
-        model.add(Dense(6, activation=act_func,
+        model.add(Dense(6, activation='selu',
                         kernel_initializer='glorot_uniform'))
 
         model.add(Dense(X_train.shape[1],
@@ -374,7 +380,7 @@ class Detector:
 
 
         adam = tf.keras.optimizers.Adam(amsgrad=True)
-        model.compile(loss='mae', optimizer=adam)
+        model.compile(loss='mse', optimizer=adam)
 
         # Train model for 200 epochs, batch size of 32:
         NUM_EPOCHS = 350
@@ -385,8 +391,8 @@ class Detector:
         we use 5% of the training data for validation after each epoch (validation_split = 0.05).
         '''
 
-        es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0.007, verbose=0, patience=25)
-        history = model.fit(corrupted_train + np.random.normal(), np.array(X_train),
+        es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0.007, verbose=0, patience=35)
+        history = model.fit(x_train, y_train,
                           batch_size=BATCH_SIZE,
                           epochs=NUM_EPOCHS,
                           validation_split=0.05,
@@ -412,7 +418,7 @@ class Detector:
         In doing this, one can make sure that this threshold is set above the “noise level”,
         and that any flagged anomalies should be statistically significant above the noise background.
         '''
-        X_pred = model.predict(np.array(X_train))
+        X_pred = model.predict(x_train)
         X_pred = pd.DataFrame(X_pred,
                               columns=X_train.columns)
         X_pred.index = X_train.index
@@ -435,7 +441,7 @@ class Detector:
         '''
 
         threshold = scored['Loss_mae'].quantile(.95) + 1*(scored['Loss_mae'].quantile(.95) - scored['Loss_mae'].quantile(.05))
-        X_pred = model.predict(np.array(X_test))
+        X_pred = model.predict(x_test)
         X_pred = pd.DataFrame(X_pred,
                               columns=X_test.columns)
         X_pred.index = X_test.index
@@ -455,19 +461,19 @@ class Detector:
         r'''
         We then calculate the same metrics also for the training set, and merge all data in a single dataframe.
         '''
-        X_pred = model.predict(np.array(X_test))
+        X_pred = model.predict(x_test)
         X_pred = pd.DataFrame(X_pred,
                               columns=X_test.columns)
         X_pred.index = X_test.index
 
         scored_test = pd.DataFrame(index=X_test.index)
-        scored_test['Loss_mae'] = np.mean(np.abs(X_pred-X_test), axis=1)
+        scored_test['Loss_mae'] = np.mean(np.abs(X_pred-x_test), axis=1)
         scored_test['Threshold'] = threshold
         scored_test['Anomaly'] = scored_test['Loss_mae'] > scored_test['Threshold']
 
 
 
-        X_pred_train = model.predict(np.array(X_train))
+        X_pred_train = model.predict(x_train)
         X_pred_train = pd.DataFrame(X_pred_train,
                                     columns=X_train.columns)
         X_pred_train.index = X_train.index
@@ -513,11 +519,12 @@ class Detector:
         return scored
 
 
-    def nonlinear_LSTM_autoencoder_detect(self, X_train, X_test, ups):
+    def nonlinear_LSTM_autoencoder_detect(self, X_train, X_test, Y_train, Y_test, ups):
 
-            #act_func = 'relu'
-            train = X_train.to_numpy()
+            x_train = X_train.to_numpy()
+            y_train = Y_train.to_numpy()
 
+            """
             corrupted_train = train.copy()
 
 
@@ -525,13 +532,17 @@ class Detector:
             random_cols_to_corrupt = np.random.randint(0, corrupted_train.shape[1], size=(int(corrupted_train.size * 0.4),))
 
             corrupted_train[random_rows_to_corrupt, random_cols_to_corrupt] = 0
-
-            test = X_test.to_numpy()
+            """
+            x_test = X_test.to_numpy()
+            y_test = Y_test.to_numpy()
             timesteps = 1
-            n_features = 1
-            train = train.reshape(train.shape[0], timesteps, n_features)
-            corrupted_train = corrupted_train.reshape(corrupted_train.shape[0], timesteps, n_features)
+            n_features = 6
+            x_train = x_train.reshape(x_train.shape[0], timesteps, n_features)
+            y_train = y_train.reshape(y_train.shape[0], timesteps, n_features)
 
+            #corrupted_train = corrupted_train.reshape(corrupted_train.shape[0], timesteps, n_features)
+
+            "Build the Bidirectional LSTM Autoencoder"
 
             model = Sequential()
 
@@ -558,7 +569,7 @@ class Detector:
             #model.summary()
             # fit model
             es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0.005, verbose=0, patience=35)
-            history = model.fit(corrupted_train + np.random.normal() , train , epochs=350, batch_size=64, verbose=0, steps_per_epoch=None, validation_split=0.05, callbacks=[es])
+            history = model.fit(x_train, y_train, epochs=350, batch_size=64, verbose=0, steps_per_epoch=None, validation_split=0.05, callbacks=[es])
 
             plt.plot(history.history['loss'],
                      'b',
@@ -574,13 +585,13 @@ class Detector:
             plt.ylim([ymin, ymax])
             plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
 
-            X_pred = model.predict(train).reshape(train.shape[0], train.shape[-1])
+            X_pred = model.predict(x_train).reshape(x_train.shape[0], x_train.shape[-1])
             X_pred = pd.DataFrame(X_pred,
                                   columns=X_train.columns)
             X_pred.index = X_train.index
 
             scored_train = pd.DataFrame(index=X_train.index)
-            scored_train['Loss_mae'] = np.mean(np.abs(X_pred-train.reshape(train.shape[0],train.shape[-1])), axis = 1)
+            scored_train['Loss_mae'] = np.mean(np.abs(X_pred-x_train.reshape(x_train.shape[0], x_train.shape[-1])), axis = 1)
             plt.figure()
             sns.distplot(scored_train['Loss_mae'],
                          bins = 100,
@@ -596,13 +607,13 @@ class Detector:
             scored_train['Threshold'] = threshold
             scored_train['Anomaly'] = scored_train['Loss_mae'] > scored_train['Threshold']
 
-            X_test_pred = model.predict(test.reshape(test.shape[0], timesteps, test.shape[-1])).reshape(test.shape[0], test.shape[-1])
+            X_test_pred = model.predict(x_test.reshape(x_test.shape[0], timesteps, x_test.shape[-1])).reshape(x_test.shape[0], x_test.shape[-1])
             X_test_pred = pd.DataFrame(X_test_pred,
                                   columns=X_test.columns)
             X_test_pred.index = X_test.index
 
             scored_test = pd.DataFrame(index=X_test.index)
-            scored_test['Loss_mae'] = np.mean(np.abs(X_test_pred-test), axis=1)
+            scored_test['Loss_mae'] = np.mean(np.abs(X_test_pred-y_test), axis=1)
             scored_test['Threshold'] = threshold
             scored_test['Anomaly'] = scored_test['Loss_mae'] > scored_test['Threshold']
 
