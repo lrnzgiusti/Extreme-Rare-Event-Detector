@@ -356,11 +356,10 @@ class Loader:
             clean_temperature[ups].index = pd.to_datetime(ups_to_temperature[ups].Time[:-2], format="%Y.%m.%d %H:%M:%S.%f")
 
 
-            """
             ups_temperature = ups_to_temperature[ups].Temperature
-            gauss_kernel = Gaussian1DKernel(ups_temperature.std()**2)
+            gauss_kernel = Gaussian1DKernel(ups_temperature.std()*6)
             smoothed_data_gauss = convolve(ups_temperature, gauss_kernel)
-            filtered_temperature = ups_temperature#smoothed_data_gauss
+            filtered_temperature = smoothed_data_gauss
             dTemperature = np.gradient(filtered_temperature, edge_order=2)[:-2]
             energy_of_dTemperature = np.cumsum(dTemperature**2) #how much is changed the system over time
             signed_total_variation = np.cumsum(dTemperature**3) #how much is changed the system over time considering it's behavour
@@ -375,9 +374,9 @@ class Loader:
             ups_to_functionals[ups]['EdE']  = dEnergy
             ups_to_functionals[ups]['dSTV'] = dSTV
             ups_to_functionals[ups].index = pd.to_datetime(ups_to_temperature[ups].Time[:-2], format="%Y.%m.%d %H:%M:%S.%f")
-            """
 
-        return noisy_temperature, clean_temperature#ups_to_functionals
+
+        return ups_to_functionals
 
 
 
@@ -527,22 +526,3 @@ class Loader:
             pickle.dump(ups_to_eta, output_file)
 
         return ups_to_eta
-
-import matplotlib.pyplot as plt
-l = Loader()
-n, c = l.load_temperature_functionals()
-ups = 'ESS328_SLASH_5E'
-plt.figure(figsize=(28,10))
-n[ups].plot(subplots=True,  layout=(2,3), sharex=True, sharey=False, legend=False)
-[ax.legend(loc=1) for ax in plt.gcf().axes]
-plt.tight_layout()
-#plt.savefig(r'err1.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
-plt.show()
-
-
-plt.figure(figsize=(28,10))
-c[ups].plot(subplots=True,  layout=(2,3), sharex=True, sharey=False, legend=False)
-[ax.legend(loc=1) for ax in plt.gcf().axes]
-plt.tight_layout()
-#plt.savefig(r'err1.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
-plt.show()
