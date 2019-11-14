@@ -304,7 +304,7 @@ class Loader:
                 continue
             if remove_seasonals:
                 ups_to_temperature[ups]['season'] = automatic_seasonality_remover(ups_to_temperature[ups]['Temperature'].values)
-                #ups_to_temperature[ups]['Temperature'] = ups_to_temperature[ups]['Temperature'] - ups_to_temperature[ups]['season']
+                ups_to_temperature[ups]['Temperature'] = ups_to_temperature[ups]['Temperature'] - ups_to_temperature[ups]['season']
 
 
 
@@ -357,7 +357,7 @@ class Loader:
 
 
             ups_temperature = ups_to_temperature[ups].Temperature
-            gauss_kernel = Gaussian1DKernel(ups_temperature.std()*6)
+            gauss_kernel = Gaussian1DKernel(ups_temperature.std()**2)
             smoothed_data_gauss = convolve(ups_temperature, gauss_kernel)
             filtered_temperature = smoothed_data_gauss
             dTemperature = np.gradient(filtered_temperature, edge_order=2)[:-2]
