@@ -13,6 +13,17 @@ import scipy.stats as ss
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import *
 from astropy.convolution import Gaussian1DKernel, convolve
+
+from sklearn import preprocessing
+
+import tensorflow as tf
+from tensorflow.keras.layers import Input, Dropout, Lambda, LeakyReLU
+from tensorflow.keras.layers import Dense, LSTM, RepeatVector, TimeDistributed, Bidirectional
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras.losses import mse
+from tensorflow.keras.callbacks import EarlyStopping
+
+
 class Simulator:
     def __init__(self):
         pass
@@ -48,12 +59,12 @@ class Simulator:
         t = np.linspace(0, 10,num)
         cos = 20+7.5*(np.cos(2*np.pi*t/2))
         # Parameters of the mixture components
-        norm_params = np.array([[0, 1],
-                                [1, 1],
-                                [5, 1]])
+        norm_params = np.array([[2, 1],
+                                [5, 1],
+                                [25, 1]])
         #n_components = norm_params.shape[0]
         # Weight of each component, in this case all of them are 1/3
-        weights = [0.949, 0.0499] #np.ones(n_components, dtype=np.float64) / 3.0
+        weights = [0.90, 0.099] #np.ones(n_components, dtype=np.float64) / 3.0
         weights.append(1-sum(weights))
         # A stream of indices from which to choose the component
         mixture_idx = np.random.choice(len(weights), size=num, replace=True, p=weights)
@@ -100,29 +111,154 @@ class Simulator:
         return best_season
 
 
+
+def temporalize(X, lookback):
+    output_X = []
+    for i in range(len(X)-lookback-1):
+        t = []
+        for j in range(1,lookback+1):
+            # Gather past records upto the lookback period
+            t.append(X[[(i+j+1)]])
+        output_X.append(t)
+    return output_X
+
 plt.style.use('seaborn')
 s = Simulator()
 t = s.generate_random_date_sequence("2013-12-12 14:52:35", "2019-09-12 12:56:04", 1500)
 T = s.generate_temps(1500)
-df = pd.DataFrame()
-df['Time'] = t[:-3]
-#df['Value'] = T
 
 
-filtered_temperature = T
-dTemperature = np.gradient(filtered_temperature, edge_order=2)[:-3]
+df = pd.DataFrame(index=t)
+df['T']    = T
+df.plot()
+
+T = T - s.automatic_seasonality_remover(T)
+
+lookback = 5
+
+gauss_1D_kernel = Gaussian1DKernel(.7*np.std(T))
+T= convolve(T,gauss_1D_kernel)
+
+scaler = preprocessing.MinMaxScaler()
+
+T = np.array(scaler.fit_transform(T.reshape(-1,1)))# Random shuffle training data
+
+
+
+X_train_tp = np.array(temporalize(T, lookback))
+
+X_train_tp = X_train_tp.reshape(X_train_tp.shape[0], lookback, 1)
+
+
+test_size = np.ceil(len(X_train_tp)*.15).astype(int)
+
+
+
+train = X_train_tp[:-test_size, :, :]
+test = X_train_tp[-test_size:, :, :]
+
+
+r'''
+Scale the input variables of the model.
+
+Standardize features by removing the mean and scaling to unit variance.
+Centering and scaling happen independently on each feature by computing the relevant statistics on the samples in the training set.
+Mean and standard deviation are then stored to be used on later data using the transform method.
+Standardization of a dataset is a common requirement for many machine learning estimators:
+    they might behave badly if the individual features do not more or less look like standard normally distributed data (e.g. Gaussian with 0 mean and unit variance).
+For instance many elements used in the objective function of a learning algorithm (such as the RBF kernel of Support Vector Machines or the L1 and L2 regularizers of linear models) assume that all features are centered around 0 and have variance in the same order.
+If a feature has a variance that is orders of magnitude larger that others, it might dominate the objective function and make the estimator unable to learn from other features correctly as expected.
+'''
+
+
+model = Sequential()
+
+model.add(Bidirectional(LSTM(16, activation='relu',
+                             kernel_initializer='lecun_normal',
+                             input_shape=(5,1), return_sequences=True)))
+
+model.add(Bidirectional(LSTM(5, activation='relu',
+                             kernel_initializer='lecun_normal',
+                             return_sequences=False)))
+model.add(RepeatVector(5))
+model.add(Bidirectional(LSTM(5, activation='relu',
+                             kernel_initializer='lecun_normal',
+                             return_sequences=True)))
+model.add(Bidirectional(LSTM(16, activation='relu',
+                             kernel_initializer='lecun_normal',
+                             return_sequences=True)))
+model.add(TimeDistributed(Dense(1)))
+
+adam = tf.keras.optimizers.Adam(learning_rate=0.003, amsgrad=True)
+model.compile(optimizer=adam, loss='mae')
+#model.summary()
+# fit model
+es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0, verbose=0, patience=35)
+history = model.fit(train, train , epochs=50, batch_size=64, verbose=1, steps_per_epoch=None, validation_split=0.05, callbacks=[es])
+
+
+plt.plot(history.history['loss'],
+                     'b',
+                     label='Training loss')
+plt.plot(history.history['val_loss'],
+         'r',
+         label='Validation loss')
+plt.legend(loc='upper right')
+plt.xlabel('Epochs')
+plt.ylabel('Loss, [mse]')
+ymax = max(max(history.history['loss']), max(history.history['val_loss']))+0.5
+ymin = min(min(history.history['loss']), min(history.history['val_loss']))-0.5
+plt.ylim([ymin, ymax])
+
+X_pred = model.predict(train).reshape(train.shape[0], lookback, train.shape[-1])
+
+scored_train = pd.DataFrame(index= t[lookback+1:lookback+train.shape[0]+1])
+scored_train['Loss_mae'] = np.mean(np.abs(X_pred-train.reshape(train.shape[0], lookback,train.shape[-1])), axis = 1)
+
+
+
+threshold = scored_train['Loss_mae'].quantile(.95) + 1*(scored_train['Loss_mae'].quantile(.95) - scored_train['Loss_mae'].quantile(.05))
+scored_train['Threshold'] = threshold
+scored_train['Anomaly'] = scored_train['Loss_mae'] > scored_train['Threshold']
+
+X_test_pred = model.predict(test).reshape(test.shape[0], lookback, test.shape[-1])
+scored_test = pd.DataFrame(index=t[lookback+train.shape[0]+1:])
+scored_test['Loss_mae'] = np.mean(np.abs(X_test_pred-test.reshape(test.shape[0], lookback,test.shape[-1])), axis=1)
+scored_test['Threshold'] = threshold
+scored_test['Anomaly'] = scored_test['Loss_mae'] > scored_test['Threshold']
+
+scored = pd.concat([scored_train, scored_test], sort=False)
+
+
+ymax = 100*max(scored['Loss_mae'])
+ymin = 0.001*min(scored['Loss_mae'])
+fig = scored.plot(logy=True, figsize=(15, 9), ylim=[ymin, ymax], color=['blue', 'red'])
+
+"""
+df = pd.read_csv('simulated_data_paper.csv')
+df['T'] = df['T'] - s.automatic_seasonality_remover(df['T'].to_numpy())
+
+gauss_1D_kernel = Gaussian1DKernel(.7*np.std(df['T']))
+df['T'] = convolve(df['T'],gauss_1D_kernel)
+
+
+
+
+filtered_temperature = df['T']
+dTemperature = np.gradient(filtered_temperature, edge_order=1)
 energy_of_dTemperature = np.cumsum(dTemperature**2) #how much is changed the system over time
 signed_total_variation = np.cumsum(dTemperature**3) #how much is changed the system over time considering it's behavour
-dEnergy = np.gradient(energy_of_dTemperature, edge_order=2) #the speed in which the system is chagning
-dSTV = np.gradient(signed_total_variation, edge_order=2)
+dEnergy = np.gradient(energy_of_dTemperature, edge_order=1) #the speed in which the system is chagning
+dSTV = np.gradient(signed_total_variation, edge_order=1)
 
-df['T']    = filtered_temperature[:-3]
+df = pd.DataFrame()
+df['T']    = filtered_temperature
 df['dT']   = dTemperature
 df['EdT']  = energy_of_dTemperature
 df['STV']  = signed_total_variation
 df['EdE']  = dEnergy
 df['dSTV'] = dSTV
-df.index = pd.to_datetime(t[:-3], format="%Y.%m.%d %H:%M:%S.%f")
+df.index = pd.to_datetime(t[:-2], format="%Y.%m.%d %H:%M:%S.%f")
 
 
 plt.figure(figsize=(18,10))
@@ -132,7 +268,7 @@ plt.tight_layout()
 #plt.savefig(r'err1.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
 plt.show()
 
-"""
+
 
 df['season'] = s.automatic_seasonality_remover(df['Temperature'].values)
 df['Noise'] = df['Temperature'] - df['season']

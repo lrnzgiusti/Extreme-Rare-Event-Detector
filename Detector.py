@@ -100,7 +100,7 @@ class Detector:
             i += 1
             if i % 20 == 0:
                 print(i)
-            if ups == 'EBS11_SLASH_38':#or ups not in ['ESS329_SLASH_7E', 'EBS2C06_SLASH_BL1', 'ESS328_SLASH_5E', 'ESSXX_SLASH_ZZ', 'ESSXX_SLASH_XX']:#, 'EBS12_SLASH_33'  ,'EBS1_SLASH_56', 'EBS22_SLASH_A6', 'ESS103_SLASH_6R', 'ESS303_SLASH_2X', 'ESSXX_SLASH_YY']:
+            if ups == 'EBS11_SLASH_38':#or ups not in ['ESS329_SLASH_7E', 'EBS2C06_SLASH_BL1', 'ESS328_SLASH_5E', 'EBS12_SLASH_33'  ,'EBS1_SLASH_56', 'EBS22_SLASH_A6', 'ESS103_SLASH_6R', 'ESS303_SLASH_2X', 'ESSXX_SLASH_YY']:
                 continue
             if not os.path.isdir(r'./data/anom/'+ups):
                 os.mkdir(r'./data/anom/'+ups)
@@ -520,8 +520,8 @@ class Detector:
             corrupted_train = train.copy()
 
 
-            random_rows_to_corrupt = np.random.randint(0, corrupted_train.shape[0], size=(int(corrupted_train.size * 0.4),))
-            random_cols_to_corrupt = np.random.randint(0, corrupted_train.shape[1], size=(int(corrupted_train.size * 0.4),))
+            random_rows_to_corrupt = np.random.randint(0, corrupted_train.shape[0], size=(int(corrupted_train.size * 0.05),))
+            random_cols_to_corrupt = np.random.randint(0, corrupted_train.shape[1], size=(int(corrupted_train.size * 0.05),))
 
             corrupted_train[random_rows_to_corrupt, random_cols_to_corrupt] = 0
 
@@ -529,7 +529,7 @@ class Detector:
             timesteps = 1
             n_features = 6
             train = train.reshape(train.shape[0], timesteps, n_features)
-            corrupted_train = corrupted_train.reshape(corrupted_train.shape[0], timesteps, n_features) +  + np.random.normal()
+            corrupted_train = corrupted_train.reshape(corrupted_train.shape[0], timesteps, n_features) + np.random.normal()
 
 
             model = Sequential()
@@ -550,11 +550,11 @@ class Detector:
             model.add(TimeDistributed(Dense(n_features)))
 
             adam = tf.keras.optimizers.Adam(learning_rate=0.01, amsgrad=True)
-            model.compile(optimizer=adam, loss='mse')
+            model.compile(optimizer=adam, loss='mae')
             #model.summary()
             # fit model
             es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0, verbose=0, patience=35)
-            history = model.fit(corrupted_train, train , epochs=7, batch_size=64, verbose=0, steps_per_epoch=None, validation_split=0.05, callbacks=[es])
+            history = model.fit(train, train , epochs=100, batch_size=32, verbose=0, steps_per_epoch=None, validation_split=0.05, callbacks=[es])
 
             plt.plot(history.history['loss'],
                      'b',
@@ -570,13 +570,13 @@ class Detector:
             plt.ylim([ymin, ymax])
             plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
 
-            X_pred = model.predict(corrupted_train).reshape(train.shape[0], train.shape[-1])
+            X_pred = model.predict(train).reshape(train.shape[0], train.shape[-1])
             X_pred = pd.DataFrame(X_pred,
                                   columns=X_train.columns)
             X_pred.index = X_train.index
 
             scored_train = pd.DataFrame(index=X_train.index)
-            scored_train['Loss_mae'] = np.mean(np.abs(X_pred-corrupted_train.reshape(train.shape[0],train.shape[-1])), axis = 1)
+            scored_train['Loss_mae'] = np.mean(np.abs(X_pred-train.reshape(train.shape[0],train.shape[-1])), axis = 1)
             plt.figure()
             sns.distplot(scored_train['Loss_mae'],
                          bins = 100,
@@ -906,7 +906,7 @@ to avoid to many false positives during normal operating conditions
 '''
 
 Detector().scheduler()
-#iaia = Detector().false_positive_detect()
+iaia = Detector().false_positive_detect()
 
 #Detector().nonlinear_autoencoder_detect()
 #Detector().nonlinear_LSTM_autoencoder_detect()
