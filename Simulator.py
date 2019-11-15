@@ -122,6 +122,23 @@ def temporalize(X, lookback):
         output_X.append(t)
     return output_X
 
+
+def flatten(X):
+    '''
+    Flatten a 3D array.
+
+    Input
+    X            A 3D array for lstm, where the array is sample x timesteps x features.
+
+    Output
+    flattened_X  A 2D array, sample x features.
+    '''
+    flattened_X = np.empty((X.shape[0], X.shape[2]))  # sample x features array.
+    for i in range(X.shape[0]):
+        flattened_X[i] = X[i, (X.shape[1]-1), :]
+    return(flattened_X)
+
+
 plt.style.use('seaborn')
 s = Simulator()
 t = s.generate_random_date_sequence("2013-12-12 14:52:35", "2019-09-12 12:56:04", 1500)
@@ -139,43 +156,60 @@ lookback = 5
 gauss_1D_kernel = Gaussian1DKernel(.7*np.std(T))
 T= convolve(T,gauss_1D_kernel)
 
+filtered_temperature = T
+dTemperature = np.gradient(filtered_temperature, edge_order=1)
+energy_of_dTemperature = np.cumsum(dTemperature**2) #how much is changed the system over time
+signed_total_variation = np.cumsum(dTemperature**3) #how much is changed the system over time considering it's behavour
+dEnergy = np.gradient(energy_of_dTemperature, edge_order=1) #the speed in which the system is chagning
+dSTV = np.gradient(signed_total_variation, edge_order=1)
+
+df = pd.DataFrame()
+df['T']    =  filtered_temperature
+df['dT']   = dTemperature
+df['EdT']  = energy_of_dTemperature
+df['STV']  = signed_total_variation
+df['EdE']  = dEnergy
+df['dSTV'] = dSTV
+df.index = pd.to_datetime(t, format="%Y.%m.%d %H:%M:%S.%f")
+
 scaler = preprocessing.MinMaxScaler()
 
-T = np.array(scaler.fit_transform(T.reshape(-1,1)))# Random shuffle training data
+test_size = np.ceil(len(df)*.15).astype(int)
+
+dataset_train = df[:-test_size]
+dataset_test = df[-test_size:]
+
+scaler = preprocessing.MinMaxScaler()
+
+X_train = pd.DataFrame(scaler.fit_transform(dataset_train),
+                       columns=dataset_train.columns,
+                       index=dataset_train.index)#.sample(frac=1)# Random shuffle training data
+
+X_test = pd.DataFrame(scaler.transform(dataset_test),
+                      columns=dataset_test.columns,
+                      index=dataset_test.index)
+
+df = X_train.append(X_test, sort=False)
+
+frame = df.to_numpy()
+features = 6
+
+tmp =  np.apply_along_axis(temporalize, 0, frame[:,0], lookback=lookback)
+for i in range(1,features):
+ tmp = np.append(tmp, np.apply_along_axis(temporalize, 0, frame[:,i], lookback=lookback),axis=2)
 
 
-
-X_train_tp = np.array(temporalize(T, lookback))
-
-X_train_tp = X_train_tp.reshape(X_train_tp.shape[0], lookback, 1)
+train = tmp[:-test_size]
+test = tmp[-test_size:]
 
 
-test_size = np.ceil(len(X_train_tp)*.15).astype(int)
-
-
-
-train = X_train_tp[:-test_size, :, :]
-test = X_train_tp[-test_size:, :, :]
-
-
-r'''
-Scale the input variables of the model.
-
-Standardize features by removing the mean and scaling to unit variance.
-Centering and scaling happen independently on each feature by computing the relevant statistics on the samples in the training set.
-Mean and standard deviation are then stored to be used on later data using the transform method.
-Standardization of a dataset is a common requirement for many machine learning estimators:
-    they might behave badly if the individual features do not more or less look like standard normally distributed data (e.g. Gaussian with 0 mean and unit variance).
-For instance many elements used in the objective function of a learning algorithm (such as the RBF kernel of Support Vector Machines or the L1 and L2 regularizers of linear models) assume that all features are centered around 0 and have variance in the same order.
-If a feature has a variance that is orders of magnitude larger that others, it might dominate the objective function and make the estimator unable to learn from other features correctly as expected.
-'''
 
 
 model = Sequential()
 
 model.add(Bidirectional(LSTM(16, activation='relu',
                              kernel_initializer='lecun_normal',
-                             input_shape=(5,1), return_sequences=True)))
+                             input_shape=(lookback,features), return_sequences=True)))
 
 model.add(Bidirectional(LSTM(5, activation='relu',
                              kernel_initializer='lecun_normal',
@@ -187,7 +221,7 @@ model.add(Bidirectional(LSTM(5, activation='relu',
 model.add(Bidirectional(LSTM(16, activation='relu',
                              kernel_initializer='lecun_normal',
                              return_sequences=True)))
-model.add(TimeDistributed(Dense(1)))
+model.add(TimeDistributed(Dense(features)))
 
 adam = tf.keras.optimizers.Adam(learning_rate=0.003, amsgrad=True)
 model.compile(optimizer=adam, loss='mae')
@@ -213,7 +247,7 @@ plt.ylim([ymin, ymax])
 X_pred = model.predict(train).reshape(train.shape[0], lookback, train.shape[-1])
 
 scored_train = pd.DataFrame(index= t[lookback+1:lookback+train.shape[0]+1])
-scored_train['Loss_mae'] = np.mean(np.abs(X_pred-train.reshape(train.shape[0], lookback,train.shape[-1])), axis = 1)
+scored_train['Loss_mae'] = np.mean(flatten(np.abs(X_pred-train)), axis = 1)
 
 
 
@@ -223,7 +257,7 @@ scored_train['Anomaly'] = scored_train['Loss_mae'] > scored_train['Threshold']
 
 X_test_pred = model.predict(test).reshape(test.shape[0], lookback, test.shape[-1])
 scored_test = pd.DataFrame(index=t[lookback+train.shape[0]+1:])
-scored_test['Loss_mae'] = np.mean(np.abs(X_test_pred-test.reshape(test.shape[0], lookback,test.shape[-1])), axis=1)
+scored_test['Loss_mae'] = np.mean(flatten(np.abs(X_test_pred-test)), axis=1)
 scored_test['Threshold'] = threshold
 scored_test['Anomaly'] = scored_test['Loss_mae'] > scored_test['Threshold']
 
@@ -244,21 +278,7 @@ df['T'] = convolve(df['T'],gauss_1D_kernel)
 
 
 
-filtered_temperature = df['T']
-dTemperature = np.gradient(filtered_temperature, edge_order=1)
-energy_of_dTemperature = np.cumsum(dTemperature**2) #how much is changed the system over time
-signed_total_variation = np.cumsum(dTemperature**3) #how much is changed the system over time considering it's behavour
-dEnergy = np.gradient(energy_of_dTemperature, edge_order=1) #the speed in which the system is chagning
-dSTV = np.gradient(signed_total_variation, edge_order=1)
 
-df = pd.DataFrame()
-df['T']    = filtered_temperature
-df['dT']   = dTemperature
-df['EdT']  = energy_of_dTemperature
-df['STV']  = signed_total_variation
-df['EdE']  = dEnergy
-df['dSTV'] = dSTV
-df.index = pd.to_datetime(t[:-2], format="%Y.%m.%d %H:%M:%S.%f")
 
 
 plt.figure(figsize=(18,10))

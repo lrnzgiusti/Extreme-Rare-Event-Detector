@@ -100,7 +100,7 @@ class Detector:
             i += 1
             if i % 20 == 0:
                 print(i)
-            if ups == 'EBS11_SLASH_38':#or ups not in ['ESS329_SLASH_7E', 'EBS2C06_SLASH_BL1', 'ESS328_SLASH_5E', 'EBS12_SLASH_33'  ,'EBS1_SLASH_56', 'EBS22_SLASH_A6', 'ESS103_SLASH_6R', 'ESS303_SLASH_2X', 'ESSXX_SLASH_YY']:
+            if ups == 'EBS11_SLASH_38' or ups not in ['ESS329_SLASH_7E', 'EBS2C06_SLASH_BL1', 'ESS328_SLASH_5E', 'EBS12_SLASH_33'  ,'EBS1_SLASH_56', 'EBS22_SLASH_A6', 'ESS103_SLASH_6R', 'ESS303_SLASH_2X', 'ESSXX_SLASH_ZZ', 'ESSXX_SLASH_XX']:
                 continue
             if not os.path.isdir(r'./data/anom/'+ups):
                 os.mkdir(r'./data/anom/'+ups)
@@ -515,7 +515,53 @@ class Detector:
     def nonlinear_LSTM_autoencoder_detect(self, X_train, X_test, ups):
 
             #act_func = 'relu'
-            train = X_train.to_numpy()
+
+            def temporalize(X, lookback):
+                output_X = []
+                for i in range(len(X)-lookback-1):
+                    t = []
+                    for j in range(1,lookback+1):
+                        # Gather past records upto the lookback period
+                        t.append(X[[(i+j+1)]])
+                    output_X.append(t)
+                return output_X
+
+
+            def flatten(X):
+                '''
+                Flatten a 3D array.
+
+                Input
+                X            A 3D array for lstm, where the array is sample x timesteps x features.
+
+                Output
+                flattened_X  A 2D array, sample x features.
+                '''
+                flattened_X = np.empty((X.shape[0], X.shape[2]))  # sample x features array.
+                for i in range(X.shape[0]):
+                    flattened_X[i] = X[i, (X.shape[1]-1), :]
+                return(flattened_X)
+
+
+
+            lookback = 3
+            features = 6
+
+            df = X_train.append(X_test, sort=False)
+            t = df.index
+            test_size = np.ceil(len(df)*.5).astype(int)
+
+            frame = df.to_numpy()
+
+            tmp =  np.apply_along_axis(temporalize, 0, frame[:,0], lookback=lookback)
+            for i in range(1,features):
+                tmp = np.append(tmp, np.apply_along_axis(temporalize, 0, frame[:,i], lookback=lookback),axis=2)
+
+
+            train = tmp[:-test_size]
+            test = tmp[-test_size:]
+
+
 
             corrupted_train = train.copy()
 
@@ -525,40 +571,34 @@ class Detector:
 
             corrupted_train[random_rows_to_corrupt, random_cols_to_corrupt] = 0
 
-            test = X_test.to_numpy()
-            timesteps = 1
-            n_features = 6
-            train = train.reshape(train.shape[0], timesteps, n_features)
-            corrupted_train = corrupted_train.reshape(corrupted_train.shape[0], timesteps, n_features) + np.random.normal()
-
 
             model = Sequential()
 
-            model.add(Bidirectional(LSTM(5, activation='relu',
+            model.add(Bidirectional(LSTM(32, activation='relu',
                                          kernel_initializer='lecun_normal',
-                                         input_shape=(timesteps,n_features), return_sequences=True)))
-            model.add(Bidirectional(LSTM(3, activation='relu',
+                                         input_shape=(lookback,features), return_sequences=True)))
+            model.add(Bidirectional(LSTM(16, activation='relu',
                                          kernel_initializer='lecun_normal',
                                          return_sequences=False)))
-            model.add(RepeatVector(timesteps))
-            model.add(Bidirectional(LSTM(3, activation='relu',
+            model.add(RepeatVector(lookback))
+            model.add(Bidirectional(LSTM(16, activation='relu',
                                          kernel_initializer='lecun_normal',
                                          return_sequences=True)))
-            model.add(Bidirectional(LSTM(5, activation='relu',
+            model.add(Bidirectional(LSTM(32, activation='relu',
                                          kernel_initializer='lecun_normal',
                                          return_sequences=True)))
-            model.add(TimeDistributed(Dense(n_features)))
+            model.add(TimeDistributed(Dense(features)))
 
-            adam = tf.keras.optimizers.Adam(learning_rate=0.01, amsgrad=True)
+            adam = tf.keras.optimizers.Adam(learning_rate=0.003, amsgrad=True)
             model.compile(optimizer=adam, loss='mae')
             #model.summary()
             # fit model
             es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0, verbose=0, patience=35)
-            history = model.fit(train, train , epochs=100, batch_size=32, verbose=0, steps_per_epoch=None, validation_split=0.05, callbacks=[es])
+            history = model.fit(train, train , epochs=1500, batch_size=32, verbose=1, steps_per_epoch=None, validation_split=0.01, callbacks=[es])
 
             plt.plot(history.history['loss'],
-                     'b',
-                     label='Training loss')
+                                 'b',
+                                 label='Training loss')
             plt.plot(history.history['val_loss'],
                      'r',
                      label='Validation loss')
@@ -570,35 +610,27 @@ class Detector:
             plt.ylim([ymin, ymax])
             plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
 
-            X_pred = model.predict(train).reshape(train.shape[0], train.shape[-1])
-            X_pred = pd.DataFrame(X_pred,
-                                  columns=X_train.columns)
-            X_pred.index = X_train.index
+            X_pred = model.predict(train).reshape(train.shape[0], lookback, train.shape[-1])
 
-            scored_train = pd.DataFrame(index=X_train.index)
-            scored_train['Loss_mae'] = np.mean(np.abs(X_pred-train.reshape(train.shape[0],train.shape[-1])), axis = 1)
+            scored_train = pd.DataFrame(index= t[lookback+1:lookback+train.shape[0]+1])
+            scored_train['Loss_mae'] = np.mean(flatten(np.abs(X_pred-train)), axis = 1)
+
             plt.figure()
             sns.distplot(scored_train['Loss_mae'],
-                         bins = 100,
-                         kde= True,
-                        color = 'blue');
+                                     bins = 100,
+                                     kde= True,
+                                    color = 'blue');
             plt.xlim([0.0, max(scored_train['Loss_mae'])])
-
             plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss_dist.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
             plt.close()
-
 
             threshold = scored_train['Loss_mae'].quantile(.95) + 1*(scored_train['Loss_mae'].quantile(.95) - scored_train['Loss_mae'].quantile(.05))
             scored_train['Threshold'] = threshold
             scored_train['Anomaly'] = scored_train['Loss_mae'] > scored_train['Threshold']
 
-            X_test_pred = model.predict(test.reshape(test.shape[0], timesteps, test.shape[-1])).reshape(test.shape[0], test.shape[-1])
-            X_test_pred = pd.DataFrame(X_test_pred,
-                                  columns=X_test.columns)
-            X_test_pred.index = X_test.index
-
-            scored_test = pd.DataFrame(index=X_test.index)
-            scored_test['Loss_mae'] = np.mean(np.abs(X_test_pred-test), axis=1)
+            X_test_pred = model.predict(test).reshape(test.shape[0], lookback, test.shape[-1])
+            scored_test = pd.DataFrame(index=t[lookback+train.shape[0]+1:])
+            scored_test['Loss_mae'] = np.mean(flatten(np.abs(X_test_pred-test)), axis=1)
             scored_test['Threshold'] = threshold
             scored_test['Anomaly'] = scored_test['Loss_mae'] > scored_test['Threshold']
 
@@ -607,7 +639,7 @@ class Detector:
 
             ymax = 100*max(scored['Loss_mae'])
             ymin = 0.001*min(scored['Loss_mae'])
-            fig = scored.plot(logy=True, figsize=(30, 18), ylim=[ymin, ymax], color=['blue', 'red'])
+            fig = scored.plot(logy=True, figsize=(15, 9), ylim=[ymin, ymax], color=['blue', 'red'])
             fig.get_figure().savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_test_threshold.jpeg',
                                      quality=95, optimize=True, progressive=True, format='jpeg')
 

@@ -287,6 +287,15 @@ class Loader:
                 print("Best fit period: {}".format(best_period))
             return best_season
 
+        def temporalize(X, lookback):
+            output_X = []
+            for i in range(len(X)-lookback-1):
+                t = []
+                for j in range(1,lookback+1):
+                    # Gather past records upto the lookback period
+                    t.append(X[[(i+j+1)]])
+                output_X.append(t)
+            return output_X
 
         '''
         try:
