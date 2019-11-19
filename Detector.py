@@ -85,7 +85,7 @@ class Detector:
 
         X_train = pd.DataFrame(scaler.fit_transform(dataset_train),
                                columns=dataset_train.columns,
-                               index=dataset_train.index).sample(frac=1)# Random shuffle training data
+                               index=dataset_train.index)#.sample(frac=1)# Random shuffle training data
 
         X_test = pd.DataFrame(scaler.transform(dataset_test),
                               columns=dataset_test.columns,
@@ -549,7 +549,7 @@ class Detector:
 
             df = X_train.append(X_test, sort=False)
             t = df.index
-            test_size = np.ceil(len(df)*.5).astype(int)
+            test_size = np.ceil(len(df)*.15).astype(int)
 
             frame = df.to_numpy()
 
@@ -560,8 +560,6 @@ class Detector:
 
             train = tmp[:-test_size]
             test = tmp[-test_size:]
-
-
 
             corrupted_train = train.copy()
 
@@ -574,27 +572,27 @@ class Detector:
 
             model = Sequential()
 
-            model.add(Bidirectional(LSTM(32, activation='relu',
+            model.add(Bidirectional(LSTM(8, activation='relu',
                                          kernel_initializer='lecun_normal',
                                          input_shape=(lookback,features), return_sequences=True)))
-            model.add(Bidirectional(LSTM(16, activation='relu',
+            model.add(Bidirectional(LSTM(4, activation='relu',
                                          kernel_initializer='lecun_normal',
                                          return_sequences=False)))
             model.add(RepeatVector(lookback))
-            model.add(Bidirectional(LSTM(16, activation='relu',
+            model.add(Bidirectional(LSTM(4, activation='relu',
                                          kernel_initializer='lecun_normal',
                                          return_sequences=True)))
-            model.add(Bidirectional(LSTM(32, activation='relu',
+            model.add(Bidirectional(LSTM(8, activation='relu',
                                          kernel_initializer='lecun_normal',
                                          return_sequences=True)))
             model.add(TimeDistributed(Dense(features)))
 
             adam = tf.keras.optimizers.Adam(learning_rate=0.003, amsgrad=True)
-            model.compile(optimizer=adam, loss='mae')
+            model.compile(optimizer=adam, loss='mse')
             #model.summary()
             # fit model
             es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0, verbose=0, patience=35)
-            history = model.fit(train, train , epochs=1500, batch_size=32, verbose=1, steps_per_epoch=None, validation_split=0.01, callbacks=[es])
+            history = model.fit(train+np.random.normal(0,0.1), train , epochs=50, batch_size=64, verbose=1, steps_per_epoch=None, validation_split=0.01, callbacks=[es])
 
             plt.plot(history.history['loss'],
                                  'b',
