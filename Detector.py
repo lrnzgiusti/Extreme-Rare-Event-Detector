@@ -30,6 +30,7 @@ gpus = tf.config.experimental.list_physical_devices('GPU')
 for gpu in gpus:
     tf.config.experimental.set_memory_growth(gpu, True)
 
+from scipy.stats import wasserstein_distance
 
 seed(10)
 tf.random.set_seed(10)
@@ -100,24 +101,24 @@ class Detector:
             i += 1
             if i % 20 == 0:
                 print(i)
-            if ups == 'EBS11_SLASH_38' or ups not in ['ESS329_SLASH_7E', 'EBS2C06_SLASH_BL1', 'ESS328_SLASH_5E', 'EBS12_SLASH_33'  ,'EBS1_SLASH_56', 'EBS22_SLASH_A6', 'ESS103_SLASH_6R', 'ESS303_SLASH_2X', 'ESSXX_SLASH_ZZ', 'ESSXX_SLASH_XX']:
+            if ups[0] == 'EBS11_SLASH_38':# or ups not in ['HEAL_COLL', 'FAIL_COLL']:# ['ESS329_SLASH_7E', 'EBS2C06_SLASH_BL1', 'ESS328_SLASH_5E', 'EBS12_SLASH_33'  ,'EBS1_SLASH_56', 'EBS22_SLASH_A6', 'ESS103_SLASH_6R', 'ESS303_SLASH_2X', 'ESSXX_SLASH_ZZ', 'ESSXX_SLASH_XX']:
                 continue
-            if not os.path.isdir(r'./data/anom/'+ups):
-                os.mkdir(r'./data/anom/'+ups)
+            if not os.path.isdir(r'./data/anom/'+ups[0]):
+                os.mkdir(r'./data/anom/'+ups[0])
 
             #X_train, X_test = self.load_and_scale(ups_to_functionals[ups])
             #md = self.mahalanobis_distances(X_train, X_test, ups)
 
-            X_train, X_test = self.load_and_scale(ups_to_functionals[ups])
+            X_train, X_test = self.load_and_scale(ups[1])
             #autoenc = self.nonlinear_autoencoder_detect(X_train, X_test, ups)
-            LSTM_autoenc = self.nonlinear_LSTM_autoencoder_detect(X_train, X_test, ups)
+            LSTM_autoenc = self.nonlinear_LSTM_autoencoder_detect(X_train, X_test, ups[0])
 
             fig, axes = plt.subplots(nrows=3)
 
             #md.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'], title='Mahalanobis Anomaly' ,ax=axes[0])
             #autoenc.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'], title='Autoencoder Anomaly' , ax=axes[1])
             LSTM_autoenc.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'],  title='LSTM Autoencoder Anomaly',  ax=axes[2])
-            plt.savefig(r'./data/anom/'+ups+'/merged.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+            plt.savefig(r'./data/anom/'+ups[0]+'/merged.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
 
             plt.close('all')
 
@@ -591,8 +592,8 @@ class Detector:
             model.compile(optimizer=adam, loss='mse')
             #model.summary()
             # fit model
-            es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0, verbose=0, patience=35)
-            history = model.fit(train+np.random.normal(0,0.1), train , epochs=50, batch_size=64, verbose=1, steps_per_epoch=None, validation_split=0.01, callbacks=[es])
+            es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0, verbose=0, patience=2)
+            history = model.fit(train+np.random.normal(0,0.1), train , epochs=10, batch_size=512, verbose=1, steps_per_epoch=None, validation_split=0.01, callbacks=[es])
 
             plt.plot(history.history['loss'],
                                  'b',
@@ -926,6 +927,22 @@ class Detector:
                     ups_to_false_positive[ups].append(row['Time'])
         return ups_to_false_positive
 
+    def min_cost_transport(self, anomalities_path=r'C:\Users\logiusti\Lorenzo\PyWorkspace\scripts\Wrapper\data\anom'):
+        os.chdir(anomalities_path)
+        ups_to_dist = dict()
+        for ups in os.listdir():
+            df = pd.read_csv("./"+ups+'/LSTM_autoencoder_distance.csv')
+            df['Time'] = pd.to_datetime(df['Time'], format="%Y-%m-%d %H:%M:%S.%f")
+            df.sort_values(by='Time', inplace=True)
+            df.reset_index(drop=True, inplace=True)
+            test_size = np.ceil(len(df)*.5).astype(int)
+            train = df[:-test_size]
+            test = df[-test_size:]
+            wa, a = np.histogram(test['Loss_mae'], density=True)
+            wb, b = np.histogram(train['Loss_mae'], density=True)
+            ups_to_dist[ups] = wasserstein_distance(a,b)
+
+        return ups_to_dist
 r'''
 
 Summary:
@@ -936,7 +953,7 @@ to avoid to many false positives during normal operating conditions
 '''
 
 Detector().scheduler()
-iaia = Detector().false_positive_detect()
+#iaia = Detector().min_cost_transport()
 
 #Detector().nonlinear_autoencoder_detect()
 #Detector().nonlinear_LSTM_autoencoder_detect()

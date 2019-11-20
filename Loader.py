@@ -18,7 +18,7 @@ class Loader:
     Class which provides all the functionalities to load the data
 
     """
-    def __init__(self, ups_data_path=r"C:\Users\logiusti\Lorenzo\Data\ups"):
+    def __init__(self, ups_data_path=r"C:\Users\logiusti\Lorenzo\Data\coll"):
         self.__ups_data_path = ups_data_path
         self.__ups_to_commission_date = self.load_commission_dates(r"C:\Users\logiusti\Lorenzo\Data\Grapheable\commission_date_df.csv")
         self.__ups_to_temperature = self.load_temperatures()
@@ -184,8 +184,8 @@ class Loader:
             df_tmp['Time'] = pd.to_datetime(df_tmp['Time'], format="%Y-%m-%d %H:%M:%S.%f")
 
             #remove ouliers statically
-            df_tmp.drop(df_tmp[(df_tmp['Value'] <= 7.5) |
-                               (df_tmp['Value'] >= 60)].index, inplace=True)
+            #df_tmp.drop(df_tmp[(df_tmp['Value'] <= 7.5) |
+            #                   (df_tmp['Value'] >= 60)].index, inplace=True)
 
             #earlier events comes first
             df_tmp.sort_values(by=['Time'], inplace=True)
@@ -261,7 +261,7 @@ class Loader:
             x_season = np.concatenate((np.tile(x_season, num_period), x_season[:len(x) % period]))
             return x_season
 
-        def automatic_seasonality_remover(x, k_components=10, verbose=False):
+        def automatic_seasonality_remover(x, k_components=15, verbose=False):
             """Extracts the most likely seasonal component via FFT"""
             f_x = np.fft.rfft(x - np.mean(x))
             f_x = np.real(f_x * f_x.conj())
@@ -287,16 +287,6 @@ class Loader:
                 print("Best fit period: {}".format(best_period))
             return best_season
 
-        def temporalize(X, lookback):
-            output_X = []
-            for i in range(len(X)-lookback-1):
-                t = []
-                for j in range(1,lookback+1):
-                    # Gather past records upto the lookback period
-                    t.append(X[[(i+j+1)]])
-                output_X.append(t)
-            return output_X
-
         '''
         try:
             ups_to_temperature = self.__ups_to_temperature
@@ -319,7 +309,6 @@ class Loader:
 
             """
             Noisy temperature
-            """
             filtered_temperature = ups_to_temperature[ups].Temperature
 
 
@@ -341,9 +330,8 @@ class Loader:
             noisy_temperature[ups]['dSTV'] = dSTV
             noisy_temperature[ups].index = pd.to_datetime(ups_to_temperature[ups].Time[:-2], format="%Y.%m.%d %H:%M:%S.%f")
 
-            """
             Clean temperature
-            """
+
             filtered_temperature = ups_to_temperature[ups].season
 
             gauss_kernel = Gaussian1DKernel(filtered_temperature.std()**2)
@@ -365,6 +353,7 @@ class Loader:
             clean_temperature[ups].index = pd.to_datetime(ups_to_temperature[ups].Time[:-2], format="%Y.%m.%d %H:%M:%S.%f")
 
 
+            """
             ups_temperature = ups_to_temperature[ups].Temperature
             gauss_kernel = Gaussian1DKernel(ups_temperature.std()**2)
             smoothed_data_gauss = convolve(ups_temperature, gauss_kernel)
@@ -384,8 +373,10 @@ class Loader:
             ups_to_functionals[ups]['dSTV'] = dSTV
             ups_to_functionals[ups].index = pd.to_datetime(ups_to_temperature[ups].Time[:-2], format="%Y.%m.%d %H:%M:%S.%f")
 
+            yield ups, ups_to_functionals[ups]
 
-        return ups_to_functionals
+        return
+        #return ups_to_functionals
 
 
 
