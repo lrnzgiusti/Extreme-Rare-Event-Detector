@@ -184,14 +184,17 @@ class Loader:
             df_tmp['Time'] = pd.to_datetime(df_tmp['Time'], format="%Y-%m-%d %H:%M:%S.%f")
 
             #remove ouliers statically
-            #df_tmp.drop(df_tmp[(df_tmp['Value'] <= 7.5) |
-            #                   (df_tmp['Value'] >= 60)].index, inplace=True)
+            df_tmp.drop(df_tmp[(df_tmp['Value'] <= 7.5) |
+                                (df_tmp['Value'] >= 100)].index, inplace=True)
+
+            #sample for dim-red
+            df_tmp = df_tmp.sample(frac=0.003)
 
             #earlier events comes first
             df_tmp.sort_values(by=['Time'], inplace=True)
             df_tmp.reset_index(drop=True, inplace=True)
             df_tmp.rename(columns={'Value':'Temperature'}, inplace=True)
-            ups_to_temperature[ups] = df_tmp
+            ups_to_temperature[ups] = df_tmp ##AAAA remove sample!!!
 
         os.chdir(pwd)
         with open(r"./data/ups_to_temperature.pickle", "wb") as output_file:
@@ -254,14 +257,12 @@ class Loader:
         def seasonal_decomposition(x, period):
             """Extracts the seasonal components of the signal x, according to period"""
             num_period = len(x) // period
-            assert(num_period > 0)
-
             x_trunc = x[:num_period*period].reshape((num_period, period))
             x_season = np.mean(x_trunc, axis=0)
             x_season = np.concatenate((np.tile(x_season, num_period), x_season[:len(x) % period]))
             return x_season
 
-        def automatic_seasonality_remover(x, k_components=15, verbose=False):
+        def automatic_seasonality_remover(x, k_components=20, verbose=False):
             """Extracts the most likely seasonal component via FFT"""
             f_x = np.fft.rfft(x - np.mean(x))
             f_x = np.real(f_x * f_x.conj())
@@ -272,7 +273,7 @@ class Loader:
             best_season = np.zeros(len(x))
 
             for period in periods:
-                if period == len(x): continue
+                if period == len(x) or period < 0: continue
                 x_season = seasonal_decomposition(x, period)
                 error = np.average((x - x_season)**2)
                 if verbose:
@@ -295,83 +296,36 @@ class Loader:
         '''
         ups_to_temperature = self.load_temperatures()
         ups_to_functionals = {}
-
-        noisy_temperature = {}
-        clean_temperature = {}
         for ups in ups_to_temperature:
             if len(ups_to_temperature[ups]['Temperature']) <= 11:
                 continue
             if remove_seasonals:
+                ups_to_temperature[ups]['Temperature'] = ups_to_temperature[ups]['Temperature']**2
                 ups_to_temperature[ups]['season'] = automatic_seasonality_remover(ups_to_temperature[ups]['Temperature'].values)
-                ups_to_temperature[ups]['Temperature'] = ups_to_temperature[ups]['Temperature'] - ups_to_temperature[ups]['season']
+                ups_to_temperature[ups]['Temperature'] = (ups_to_temperature[ups]['Temperature'] - ups_to_temperature[ups]['season'])**3
 
-
-
-            """
-            Noisy temperature
-            filtered_temperature = ups_to_temperature[ups].Temperature
-
-
-            gauss_kernel = Gaussian1DKernel(filtered_temperature.std()**2)
-            filtered_temperature = convolve(filtered_temperature, gauss_kernel)
-
-            dTemperature = np.gradient(filtered_temperature, edge_order=2)[:-2]
-            energy_of_dTemperature = np.cumsum(dTemperature**2) #how much is changed the system over time
-            signed_total_variation = np.cumsum(dTemperature**3) #how much is changed the system over time considering it's behavour
-            dEnergy = np.gradient(energy_of_dTemperature, edge_order=2) #the speed in which the system is chagning
-            dSTV = np.gradient(signed_total_variation, edge_order=2)
-
-            noisy_temperature[ups] = pd.DataFrame()
-            noisy_temperature[ups]['T']    = filtered_temperature[:-2]
-            noisy_temperature[ups]['dT']   = dTemperature
-            noisy_temperature[ups]['EdT']  = energy_of_dTemperature
-            noisy_temperature[ups]['STV']  = signed_total_variation
-            noisy_temperature[ups]['EdE']  = dEnergy
-            noisy_temperature[ups]['dSTV'] = dSTV
-            noisy_temperature[ups].index = pd.to_datetime(ups_to_temperature[ups].Time[:-2], format="%Y.%m.%d %H:%M:%S.%f")
-
-            Clean temperature
-
-            filtered_temperature = ups_to_temperature[ups].season
-
-            gauss_kernel = Gaussian1DKernel(filtered_temperature.std()**2)
-            filtered_temperature = convolve(filtered_temperature, gauss_kernel)
-
-            dTemperature = np.gradient(filtered_temperature, edge_order=2)[:-2]
-            energy_of_dTemperature = np.cumsum(dTemperature**2) #how much is changed the system over time
-            signed_total_variation = np.cumsum(dTemperature**3) #how much is changed the system over time considering it's behavour
-            dEnergy = np.gradient(energy_of_dTemperature, edge_order=2) #the speed in which the system is chagning
-            dSTV = np.gradient(signed_total_variation, edge_order=2)
-
-            clean_temperature[ups] = pd.DataFrame()
-            clean_temperature[ups]['T']    = filtered_temperature[:-2]
-            clean_temperature[ups]['dT']   = dTemperature
-            clean_temperature[ups]['EdT']  = energy_of_dTemperature
-            clean_temperature[ups]['STV']  = signed_total_variation
-            clean_temperature[ups]['EdE']  = dEnergy
-            clean_temperature[ups]['dSTV'] = dSTV
-            clean_temperature[ups].index = pd.to_datetime(ups_to_temperature[ups].Time[:-2], format="%Y.%m.%d %H:%M:%S.%f")
-
-
-            """
             ups_temperature = ups_to_temperature[ups].Temperature
-            gauss_kernel = Gaussian1DKernel(ups_temperature.std()**2)
+
+            #print(stdev, len(ups_temperature)*0.008)
+            #if stdev > len(ups_temperature)*0.008:
+            stdev = len(ups_temperature)*0.008 # 0.008 for upses, 0.01  for colls, 0.001 for  virtual (probably too much)
+            gauss_kernel = Gaussian1DKernel(stdev)
             smoothed_data_gauss = convolve(ups_temperature, gauss_kernel)
             filtered_temperature = smoothed_data_gauss
-            dTemperature = np.gradient(filtered_temperature, edge_order=2)[:-2]
+            dTemperature = np.gradient(filtered_temperature, edge_order=2)#[:-2]
             energy_of_dTemperature = np.cumsum(dTemperature**2) #how much is changed the system over time
             signed_total_variation = np.cumsum(dTemperature**3) #how much is changed the system over time considering it's behavour
             dEnergy = np.gradient(energy_of_dTemperature, edge_order=2) #the speed in which the system is chagning
             dSTV = np.gradient(signed_total_variation, edge_order=2)
 
             ups_to_functionals[ups] = pd.DataFrame()
-            ups_to_functionals[ups]['T']    = filtered_temperature[:-2]
+            ups_to_functionals[ups]['T']    = filtered_temperature#[:-2]
             ups_to_functionals[ups]['dT']   = dTemperature
             ups_to_functionals[ups]['EdT']  = energy_of_dTemperature
             ups_to_functionals[ups]['STV']  = signed_total_variation
             ups_to_functionals[ups]['EdE']  = dEnergy
             ups_to_functionals[ups]['dSTV'] = dSTV
-            ups_to_functionals[ups].index = pd.to_datetime(ups_to_temperature[ups].Time[:-2], format="%Y.%m.%d %H:%M:%S.%f")
+            ups_to_functionals[ups].index = pd.to_datetime(ups_to_temperature[ups].Time, format="%Y.%m.%d %H:%M:%S.%f")#[:-2], format="%Y.%m.%d %H:%M:%S.%f")
 
             yield ups, ups_to_functionals[ups]
 

@@ -101,7 +101,7 @@ class Detector:
             i += 1
             if i % 20 == 0:
                 print(i)
-            if ups[0] == 'EBS11_SLASH_38':# or ups not in ['HEAL_COLL', 'FAIL_COLL']:# ['ESS329_SLASH_7E', 'EBS2C06_SLASH_BL1', 'ESS328_SLASH_5E', 'EBS12_SLASH_33'  ,'EBS1_SLASH_56', 'EBS22_SLASH_A6', 'ESS103_SLASH_6R', 'ESS303_SLASH_2X', 'ESSXX_SLASH_ZZ', 'ESSXX_SLASH_XX']:
+            if ups[0] == 'EBS11_SLASH_38':# or ups[0] not in ['ESS329_SLASH_7E', 'EBS2C06_SLASH_BL1', 'ESS328_SLASH_5E', 'EBS12_SLASH_33'  ,'EBS1_SLASH_56', 'EBS22_SLASH_A6', 'ESS103_SLASH_6R', 'ESS303_SLASH_2X']:
                 continue
             if not os.path.isdir(r'./data/anom/'+ups[0]):
                 os.mkdir(r'./data/anom/'+ups[0])
@@ -113,14 +113,458 @@ class Detector:
             #autoenc = self.nonlinear_autoencoder_detect(X_train, X_test, ups)
             LSTM_autoenc = self.nonlinear_LSTM_autoencoder_detect(X_train, X_test, ups[0])
 
-            fig, axes = plt.subplots(nrows=3)
+            fig, axes = plt.subplots(nrows=1)
 
             #md.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'], title='Mahalanobis Anomaly' ,ax=axes[0])
             #autoenc.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'], title='Autoencoder Anomaly' , ax=axes[1])
-            LSTM_autoenc.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'],  title='LSTM Autoencoder Anomaly',  ax=axes[2])
+            LSTM_autoenc.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'],  title='LSTM Autoencoder Anomaly',  ax=axes)
             plt.savefig(r'./data/anom/'+ups[0]+'/merged.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
 
             plt.close('all')
+
+
+    def nonlinear_LSTM_autoencoder_detect(self, X_train, X_test, ups):
+
+            #act_func = 'relu'
+
+            def temporalize(X, lookback):
+                output_X = []
+                for i in range(len(X)-lookback-1):
+                    t = []
+                    for j in range(1,lookback+1):
+                        # Gather past records upto the lookback period
+                        t.append(X[[(i+j+1)]])
+                    output_X.append(t)
+                return output_X
+
+
+            def flatten(X):
+                '''
+                Flatten a 3D array.
+
+                Input
+                X            A 3D array for lstm, where the array is sample x timesteps x features.
+
+                Output
+                flattened_X  A 2D array, sample x features.
+                '''
+                flattened_X = np.empty((X.shape[0], X.shape[2]))  # sample x features array.
+                for i in range(X.shape[0]):
+                    flattened_X[i] = X[i, (X.shape[1]-1), :]
+                return(flattened_X)
+
+
+
+            lookback = 3
+            features = 6
+
+            df = X_train.append(X_test, sort=False)
+            t = df.index
+            test_size = np.ceil(len(df)*.15).astype(int)
+
+            frame = df.to_numpy()
+
+            tmp =  np.apply_along_axis(temporalize, 0, frame[:,0], lookback=lookback)
+            for i in range(1,features):
+                tmp = np.append(tmp, np.apply_along_axis(temporalize, 0, frame[:,i], lookback=lookback),axis=2)
+
+
+            train = tmp[:-test_size]
+            test = tmp[-test_size:]
+
+            corrupted_train = train.copy()
+
+
+            random_rows_to_corrupt = np.random.randint(0, corrupted_train.shape[0], size=(int(corrupted_train.size * 0.05),))
+            random_cols_to_corrupt = np.random.randint(0, corrupted_train.shape[1], size=(int(corrupted_train.size * 0.05),))
+
+            corrupted_train[random_rows_to_corrupt, random_cols_to_corrupt] = 0
+
+
+            model = Sequential()
+
+            model.add(Bidirectional(LSTM(8, activation='relu',
+                                         kernel_initializer='lecun_normal',
+                                         #kernel_regularizer=tf.keras.regularizers.l2(0.001),
+                                         input_shape=(lookback,features), return_sequences=True)))
+            model.add(Bidirectional(LSTM(4, activation='relu',
+                                         kernel_initializer='lecun_normal',
+                                         #kernel_regularizer=tf.keras.regularizers.l2(0.001),
+                                         return_sequences=False)))
+            model.add(RepeatVector(lookback))
+            model.add(Bidirectional(LSTM(4, activation='relu',
+                                         kernel_initializer='lecun_normal',
+                                         #kernel_regularizer=tf.keras.regularizers.l2(0.001),
+                                         return_sequences=True)))
+            model.add(Bidirectional(LSTM(8, activation='relu',
+                                         kernel_initializer='lecun_normal',
+                                         #kernel_regularizer=tf.keras.regularizers.l2(0.001),
+                                         return_sequences=True)))
+            model.add(TimeDistributed(Dense(features)))
+
+            adam = tf.keras.optimizers.Adam(learning_rate=0.003, amsgrad=True)
+            model.compile(optimizer=adam, loss='mse')
+            #model.summary()
+            # fit model
+            es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0.001, verbose=0, patience=15)
+            history = model.fit(train+np.random.normal(0,0.1), train , epochs=60, batch_size=32, verbose=1, steps_per_epoch=None, validation_split=0.01, callbacks=[es])
+
+            plt.plot(history.history['loss'],
+                                 'b',
+                                 label='Training loss')
+            plt.plot(history.history['val_loss'],
+                     'r',
+                     label='Validation loss')
+            plt.legend(loc='upper right')
+            plt.xlabel('Epochs')
+            plt.ylabel('Loss, [mse]')
+            ymax = max(max(history.history['loss']), max(history.history['val_loss']))+0.5
+            ymin = min(min(history.history['loss']), min(history.history['val_loss']))-0.5
+            plt.ylim([ymin, ymax])
+            plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+
+            X_pred = model.predict(train).reshape(train.shape[0], lookback, train.shape[-1])
+
+            scored_train = pd.DataFrame(index= t[lookback+1:lookback+train.shape[0]+1])
+            scored_train['Loss_mae'] = np.mean(flatten(np.abs(X_pred-train)), axis = 1)
+
+            plt.figure()
+            sns.distplot(scored_train['Loss_mae'],
+                                     bins = 100,
+                                     kde= True,
+                                    color = 'blue');
+            plt.xlim([0.0, max(scored_train['Loss_mae'])])
+            plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss_dist.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+            plt.close()
+
+            threshold = scored_train['Loss_mae'].quantile(.95) + 1*(scored_train['Loss_mae'].quantile(.95) - scored_train['Loss_mae'].quantile(.05))
+            scored_train['Threshold'] = threshold
+            scored_train['Anomaly'] = scored_train['Loss_mae'] > scored_train['Threshold']
+
+            X_test_pred = model.predict(test).reshape(test.shape[0], lookback, test.shape[-1])
+            scored_test = pd.DataFrame(index=t[lookback+train.shape[0]+1:])
+            scored_test['Loss_mae'] = np.mean(flatten(np.abs(X_test_pred-test)), axis=1)
+            scored_test['Threshold'] = threshold
+            scored_test['Anomaly'] = scored_test['Loss_mae'] > scored_test['Threshold']
+
+            scored = pd.concat([scored_train, scored_test], sort=False)
+
+
+            ymax = 100*max(scored['Loss_mae'])
+            ymin = 0.001*min(scored['Loss_mae'])
+            fig = scored.plot(logy=True, figsize=(15, 9), ylim=[ymin, ymax], color=['blue', 'red'])
+            fig.get_figure().savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_test_threshold.jpeg',
+                                     quality=95, optimize=True, progressive=True, format='jpeg')
+
+            plt.close('all')
+
+            scored.sort_index(inplace=True)
+            scored.to_csv(r'./data/anom/'+ups+'/LSTM_autoencoder_distance.csv')
+
+            return scored
+
+    def performance_measurements(self):
+        r"""
+        True Positive (TP) if the device is labelled as anomalous and in the test period we observe a value that goes over the threshold and continue over it until the end of its period even with decreases.
+    	False Positive (FP) if the device is labelled as anomalous and in the test period we don't observe values over the threshold or values over it for a limited period of time which doesn't include the ending of the time series which can represent an anomaly of the surrounding environment.
+    	True Negative (TN) if the device is labelled as normal and in the test period we don't observe values over the threshold or values over it for a limited period of time which doesn't include the ending of the time series.
+    	False Negative (FN) if the device is labelled as normal and in the test period we observe a value that goes over the threshold and continue over it until the end of its period even with decreases.
+        """
+        pass
+
+    def variational_autoencoder(self):
+
+        ups_to_functionals = self.loader.load_temperature_functionals()
+
+        for ups in ups_to_functionals:
+            if ups == 'EBS11_SLASH_38'  or len(ups_to_functionals[ups]) < 50:
+                continue
+            if not os.path.isdir(r'./data/anom/'+ups):
+                os.mkdir(r'./data/anom/'+ups)
+
+            r'''
+            Before setting up the models,
+            we need to define train/test data.
+            To do this, we perform a simple split where we train on the 90% of the dataset
+            (which should represent normal operating conditions),
+            and test on the remaining parts of the dataset leading up to the eventual failure.
+            '''
+            data = ups_to_functionals[ups]
+            test_size = np.ceil(len(data)*.1).astype(int)
+
+            dataset_train = data[:-test_size]
+            dataset_test = data[-test_size:]
+
+            r'''
+            Scale the input variables of the model.
+
+            Standardize features by removing the mean and scaling to unit variance.
+            Centering and scaling happen independently on each feature by computing the relevant statistics on the samples in the training set.
+            Mean and standard deviation are then stored to be used on later data using the transform method.
+            Standardization of a dataset is a common requirement for many machine learning estimators:
+                they might behave badly if the individual features do not more or less look like standard normally distributed data (e.g. Gaussian with 0 mean and unit variance).
+            For instance many elements used in the objective function of a learning algorithm (such as the RBF kernel of Support Vector Machines or the L1 and L2 regularizers of linear models) assume that all features are centered around 0 and have variance in the same order.
+            If a feature has a variance that is orders of magnitude larger that others, it might dominate the objective function and make the estimator unable to learn from other features correctly as expected.
+            '''
+            scaler = preprocessing.StandardScaler()
+
+            X_train = pd.DataFrame(scaler.fit_transform(dataset_train),
+                                   columns=dataset_train.columns,
+                                   index=dataset_train.index).sample(frac=1)# Random shuffle training data
+
+            X_test = pd.DataFrame(scaler.transform(dataset_test),
+                                  columns=dataset_test.columns,
+                                  index=dataset_test.index)
+
+
+            #act_func = 'relu'
+            train = X_train.to_numpy()
+            #test = X_test.to_numpy()
+            intermediate_dim = 8
+            batch_size = 64
+            latent_dim = 2
+            epochs = 150
+
+            def sampling(args):
+                """Reparameterization trick by sampling from an isotropic unit Gaussian.
+
+                # Arguments
+                    args (tensor): mean and log of variance of Q(z|X)
+
+                # Returns
+                    z (tensor): sampled latent vector
+                """
+
+                z_mean, z_log_var = args
+                batch = tf.shape(z_mean)[0]
+                dim = tf.shape(z_mean)[1]
+                # by default, random_normal has mean = 0 and std = 1.0
+                epsilon = tf.random.normal(shape=(batch, dim))
+                return z_mean + tf.math.exp(0.5 * z_log_var) * epsilon
+
+            # VAE model = encoder + decoder
+            # build encoder model
+            inputs = Input(shape=(train.shape[1],), name='encoder_input')
+            x = Dense(intermediate_dim, activation='relu')(inputs)
+            z_mean = Dense(latent_dim, name='z_mean')(x)
+            z_log_var = Dense(latent_dim, name='z_log_var')(x)
+
+            # use reparameterization trick to push the sampling out as input
+            # note that "output_shape" isn't necessary with the TensorFlow backend
+            z = Lambda(sampling, output_shape=(latent_dim,), name='z')([z_mean, z_log_var])
+
+            # instantiate encoder model
+            encoder = Model(inputs, [z_mean, z_log_var, z], name='encoder')
+
+            # build decoder model
+            latent_inputs = Input(shape=(latent_dim,), name='z_sampling')
+            x = Dense(intermediate_dim, activation='relu')(latent_inputs)
+            outputs = Dense(train.shape[1], activation='relu')(x)
+
+            # instantiate decoder model
+            decoder = Model(latent_inputs, outputs, name='decoder')
+
+            # instantiate VAE model
+            outputs = decoder(encoder(inputs)[2])
+            vae = Model(inputs, outputs, name='vae_mlp')
+
+
+            reconstruction_loss = mse(inputs, outputs)
+            reconstruction_loss *= train.shape[1]
+            kl_loss = 1 + z_log_var - tf.math.square(z_mean) - tf.math.exp(z_log_var)
+            kl_loss = tf.reduce_sum(kl_loss, axis=-1)
+            kl_loss *= -0.5
+            vae_loss = tf.reduce_mean(reconstruction_loss + kl_loss)
+            vae.add_loss(vae_loss)
+            vae.compile(optimizer='adam')
+            history = vae.fit(train,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                  validation_split=0.05,
+                  verbose=0)
+
+
+            # Visualize training/validation loss
+            plt.plot(history.history['loss'], 'b', label='Training loss')
+            plt.plot(history.history['val_loss'], 'r', label='Validation loss')
+            plt.legend(loc='upper right')
+            plt.xlabel('Epochs')
+            plt.ylabel('Loss, [mse]')
+            ylim = max(max(history.history['loss']), max(history.history['val_loss']))
+            plt.ylim([0, ylim])
+            plt.savefig(r'./data/anom/'+ups+'/VAE_loss.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+            plt.close()
+
+            r'''
+            Distribution of loss function in the training set:
+
+            By plotting the distribution of the calculated loss in the training set,
+            one can use this to identify a suitable threshold value for identifying an anomaly.
+            In doing this, one can make sure that this threshold is set above the “noise level”,
+            and that any flagged anomalies should be statistically significant above the noise background.
+            '''
+            X_pred = vae.predict(np.array(X_train))
+            X_pred = pd.DataFrame(X_pred,
+                                  columns=X_train.columns)
+            X_pred.index = X_train.index
+
+            scored = pd.DataFrame(index=X_train.index)
+            scored['Loss_mae'] = np.mean(np.abs(X_pred-X_train), axis=1)
+            plt.figure()
+            sns.distplot(scored['Loss_mae'],
+                         bins=50,
+                         kde=True,
+                         color='blue')
+            plt.xlim([0.0, max(scored['Loss_mae'])])
+            plt.savefig(r'./data/anom/'+ups+'/VAE_loss_dist.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+            plt.close()
+
+            r'''
+            From the above loss distribution,
+            let us try a threshold based on one of the last quantiles for flagging an anomaly.
+            We can then calculate the loss in the test set, to check when the output crosses the anomaly threshold.
+            '''
+
+            threshold = scored['Loss_mae'].quantile(.95) + 1*(scored['Loss_mae'].quantile(.95) - scored['Loss_mae'].quantile(.05))
+
+            X_pred = vae.predict(np.array(X_test))
+            X_pred = pd.DataFrame(X_pred,
+                                  columns=X_test.columns)
+            X_pred.index = X_test.index
+
+            scored = pd.DataFrame(index=X_test.index)
+            scored['Loss_mae'] = np.mean(np.abs(X_pred-X_test), axis=1)
+            scored['Threshold'] = threshold
+            scored['Anomaly'] = scored['Loss_mae'] > scored['Threshold']
+
+
+
+            ymax = 100*max(scored['Loss_mae'])
+            ymin = 0.001*min(scored['Loss_mae'])
+            fig = scored.plot(logy=True, figsize=(30, 18), ylim=[ymin, ymax], color=['blue', 'red'])
+            fig.get_figure().savefig(r'./data/anom/'+ups+'/VAE_test_threshold.jpeg',
+                                     quality=95, optimize=True, progressive=True, format='jpeg')
+
+            plt.close('all')
+
+
+            r'''
+            We then calculate the same metrics also for the training set, and merge all data in a single dataframe.
+            '''
+            X_pred = vae.predict(np.array(X_test))
+            X_pred = pd.DataFrame(X_pred,
+                                  columns=X_test.columns)
+            X_pred.index = X_test.index
+
+            scored_test = pd.DataFrame(index=X_test.index)
+            scored_test['Loss_mae'] = np.mean(np.abs(X_pred-X_test), axis=1)
+            scored_test['Threshold'] = threshold
+            scored_test['Anomaly'] = scored_test['Loss_mae'] > scored_test['Threshold']
+
+
+
+            X_pred_train = vae.predict(np.array(X_train))
+            X_pred_train = pd.DataFrame(X_pred_train,
+                                        columns=X_train.columns)
+            X_pred_train.index = X_train.index
+
+            scored_train = pd.DataFrame(index=X_train.index)
+            scored_train['Loss_mae'] = np.mean(np.abs(X_pred_train-X_train), axis=1)
+            scored_train['Threshold'] = threshold
+            scored_train['Anomaly'] = scored_train['Loss_mae'] > scored_train['Threshold']
+
+            scored = pd.concat([scored_train, scored_test], sort=False)
+
+            r'''
+            Isolation forest prediction based on anomality detected by the autoencoder
+            '''
+            contamination = (scored.Anomaly == True).sum()/len(scored)
+
+            clf = IsolationForest(behaviour='new', n_estimators=500, max_samples='auto', contamination=contamination, \
+                                    max_features=1.0, bootstrap=True, n_jobs=-1, random_state=42, verbose=0)
+
+            clf.fit(scored.Loss_mae.to_numpy().reshape(-1, 1))
+
+            pred = clf.predict(scored.Loss_mae.to_numpy().reshape(-1, 1))
+            dct = {-1:threshold, 1:np.nan}
+            pred = [dct[k] for k in pred]
+
+            r'''
+            Results from Autoencoder model:
+            Having calculated the loss distribution and the anomaly threshold, we can visualize the model output in the time leading up to the bearing failure:
+            '''
+            scored.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'])
+            isolation_forest = plt.scatter(scored.index, pred, s=150, c='b', marker=".")
+            plt.legend((isolation_forest,), ('Isolation Forest',), scatterpoints=1, loc='upper right', ncol=1, fontsize=8)
+            plt.savefig(r'./data/anom/'+ups+'/VAE_full_threshold.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+            plt.close('all')
+
+    def false_positive_detect(self, crit_seqs_path=r"C:\Users\logiusti\Lorenzo\PyWorkspace\scripts\Wrapper\data\critical_dates",
+                              anomalities_path=r'C:\Users\logiusti\Lorenzo\PyWorkspace\scripts\Wrapper\data\anom'):
+
+
+        ups_to_false_positive = dict()
+        def pick_the_peak(df):
+            r'''
+            We pick the time in which the loss is maximum in a t+-dt period.
+            '''
+            return df.loc[df['Loss_mae'] == max(df['Loss_mae'])]
+
+        os.chdir(anomalities_path)
+        for ups in os.listdir():
+            ups_to_false_positive[ups] = []
+            # read the critical sequences timestamps of each ups
+            try:
+                crit_seq = pd.to_datetime(pd.Series(pd.read_csv(crit_seqs_path+"\\"+ups+'_crit_seq_dates.csv', header=None)[0])).sort_values().reset_index(drop=True)
+            except FileNotFoundError:
+                crit_seq = pd.Series()
+            #read the anomaly alterts, we choose the LSTM denoising autoencore since it seems to have better performances.
+            anomalities = pd.read_csv("./"+ups+'/LSTM_autoencoder_distance.csv')
+            anomalities = anomalities.loc[anomalities['Anomaly'] == True] #use only values flagged as anomaly
+            anomalities['Time'] = pd.to_datetime(anomalities['Time'], format="%Y-%m-%d %H:%M:%S.%f")
+
+            if anomalities.Time.empty:
+                ups_to_false_positive[ups] = []
+                continue
+            #tim off, first 10% of the period should not be considered in the false positive count
+            dayoff = ((anomalities.Time.iloc[-1] - anomalities.Time.iloc[0]).days)*.1
+            #cut-off the DF
+            anomalities = anomalities.loc[anomalities['Time']  >= (pd.to_datetime(anomalities.Time.iloc[0], format="%Y-%m-%d") + pd.DateOffset(days=dayoff))]
+
+
+            #we want to group an entire period in which we've spotted an anomaly (7 days as upper bound)
+            anomalities['groups'] = (anomalities.Time.diff().fillna(pd.Timedelta(seconds=0))/np.timedelta64(7, 'D'))\
+                                            .gt(1).cumsum().add(1).astype(str)
+
+            anomalities.set_index('groups', drop=True, inplace=True)
+            danger = anomalities.groupby(level=0, group_keys=False).apply(pick_the_peak) #take the max of that period
+            danger['Time'] = danger['Time'].dt.date
+
+            #if nothing happens in the time(max[])+4days
+            for idx,row in danger.iterrows():
+                start = pd.to_datetime(row.Time, format="%Y-%m-%d")
+                end = start + pd.DateOffset(days=4)
+                if crit_seq.loc[(crit_seq >= start ) & (crit_seq <= end) ].empty and row['Loss_mae'] >= 1.5*row['Threshold']:
+                    print("Falso Positivo", ups, "\n", row)
+                    ups_to_false_positive[ups].append(row['Time'])
+        return ups_to_false_positive
+
+    def min_cost_transport(self, anomalities_path=r'C:\Users\logiusti\Lorenzo\PyWorkspace\scripts\Wrapper\data\anom'):
+        os.chdir(anomalities_path)
+        ups_to_dist = dict()
+        for ups in os.listdir():
+            df = pd.read_csv("./"+ups+'/LSTM_autoencoder_distance.csv')
+            df['Time'] = pd.to_datetime(df['Time'], format="%Y-%m-%d %H:%M:%S.%f")
+            df.sort_values(by='Time', inplace=True)
+            df.reset_index(drop=True, inplace=True)
+            test_size = np.ceil(len(df)*.5).astype(int)
+            train = df[:-test_size]
+            test = df[-test_size:]
+            wa, a = np.histogram(test['Loss_mae'], density=True)
+            wb, b = np.histogram(train['Loss_mae'], density=True)
+            ups_to_dist[ups] = wasserstein_distance(a,b)
+
+        return ups_to_dist
 
 
 
@@ -512,437 +956,6 @@ class Detector:
 
         return scored
 
-
-    def nonlinear_LSTM_autoencoder_detect(self, X_train, X_test, ups):
-
-            #act_func = 'relu'
-
-            def temporalize(X, lookback):
-                output_X = []
-                for i in range(len(X)-lookback-1):
-                    t = []
-                    for j in range(1,lookback+1):
-                        # Gather past records upto the lookback period
-                        t.append(X[[(i+j+1)]])
-                    output_X.append(t)
-                return output_X
-
-
-            def flatten(X):
-                '''
-                Flatten a 3D array.
-
-                Input
-                X            A 3D array for lstm, where the array is sample x timesteps x features.
-
-                Output
-                flattened_X  A 2D array, sample x features.
-                '''
-                flattened_X = np.empty((X.shape[0], X.shape[2]))  # sample x features array.
-                for i in range(X.shape[0]):
-                    flattened_X[i] = X[i, (X.shape[1]-1), :]
-                return(flattened_X)
-
-
-
-            lookback = 3
-            features = 6
-
-            df = X_train.append(X_test, sort=False)
-            t = df.index
-            test_size = np.ceil(len(df)*.15).astype(int)
-
-            frame = df.to_numpy()
-
-            tmp =  np.apply_along_axis(temporalize, 0, frame[:,0], lookback=lookback)
-            for i in range(1,features):
-                tmp = np.append(tmp, np.apply_along_axis(temporalize, 0, frame[:,i], lookback=lookback),axis=2)
-
-
-            train = tmp[:-test_size]
-            test = tmp[-test_size:]
-
-            corrupted_train = train.copy()
-
-
-            random_rows_to_corrupt = np.random.randint(0, corrupted_train.shape[0], size=(int(corrupted_train.size * 0.05),))
-            random_cols_to_corrupt = np.random.randint(0, corrupted_train.shape[1], size=(int(corrupted_train.size * 0.05),))
-
-            corrupted_train[random_rows_to_corrupt, random_cols_to_corrupt] = 0
-
-
-            model = Sequential()
-
-            model.add(Bidirectional(LSTM(8, activation='relu',
-                                         kernel_initializer='lecun_normal',
-                                         input_shape=(lookback,features), return_sequences=True)))
-            model.add(Bidirectional(LSTM(4, activation='relu',
-                                         kernel_initializer='lecun_normal',
-                                         return_sequences=False)))
-            model.add(RepeatVector(lookback))
-            model.add(Bidirectional(LSTM(4, activation='relu',
-                                         kernel_initializer='lecun_normal',
-                                         return_sequences=True)))
-            model.add(Bidirectional(LSTM(8, activation='relu',
-                                         kernel_initializer='lecun_normal',
-                                         return_sequences=True)))
-            model.add(TimeDistributed(Dense(features)))
-
-            adam = tf.keras.optimizers.Adam(learning_rate=0.003, amsgrad=True)
-            model.compile(optimizer=adam, loss='mse')
-            #model.summary()
-            # fit model
-            es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0, verbose=0, patience=2)
-            history = model.fit(train+np.random.normal(0,0.1), train , epochs=10, batch_size=512, verbose=1, steps_per_epoch=None, validation_split=0.01, callbacks=[es])
-
-            plt.plot(history.history['loss'],
-                                 'b',
-                                 label='Training loss')
-            plt.plot(history.history['val_loss'],
-                     'r',
-                     label='Validation loss')
-            plt.legend(loc='upper right')
-            plt.xlabel('Epochs')
-            plt.ylabel('Loss, [mse]')
-            ymax = max(max(history.history['loss']), max(history.history['val_loss']))+0.5
-            ymin = min(min(history.history['loss']), min(history.history['val_loss']))-0.5
-            plt.ylim([ymin, ymax])
-            plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
-
-            X_pred = model.predict(train).reshape(train.shape[0], lookback, train.shape[-1])
-
-            scored_train = pd.DataFrame(index= t[lookback+1:lookback+train.shape[0]+1])
-            scored_train['Loss_mae'] = np.mean(flatten(np.abs(X_pred-train)), axis = 1)
-
-            plt.figure()
-            sns.distplot(scored_train['Loss_mae'],
-                                     bins = 100,
-                                     kde= True,
-                                    color = 'blue');
-            plt.xlim([0.0, max(scored_train['Loss_mae'])])
-            plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss_dist.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
-            plt.close()
-
-            threshold = scored_train['Loss_mae'].quantile(.95) + 1*(scored_train['Loss_mae'].quantile(.95) - scored_train['Loss_mae'].quantile(.05))
-            scored_train['Threshold'] = threshold
-            scored_train['Anomaly'] = scored_train['Loss_mae'] > scored_train['Threshold']
-
-            X_test_pred = model.predict(test).reshape(test.shape[0], lookback, test.shape[-1])
-            scored_test = pd.DataFrame(index=t[lookback+train.shape[0]+1:])
-            scored_test['Loss_mae'] = np.mean(flatten(np.abs(X_test_pred-test)), axis=1)
-            scored_test['Threshold'] = threshold
-            scored_test['Anomaly'] = scored_test['Loss_mae'] > scored_test['Threshold']
-
-            scored = pd.concat([scored_train, scored_test], sort=False)
-
-
-            ymax = 100*max(scored['Loss_mae'])
-            ymin = 0.001*min(scored['Loss_mae'])
-            fig = scored.plot(logy=True, figsize=(15, 9), ylim=[ymin, ymax], color=['blue', 'red'])
-            fig.get_figure().savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_test_threshold.jpeg',
-                                     quality=95, optimize=True, progressive=True, format='jpeg')
-
-            plt.close('all')
-
-            scored.sort_index(inplace=True)
-            scored.to_csv(r'./data/anom/'+ups+'/LSTM_autoencoder_distance.csv')
-
-            return scored
-
-
-    def variational_autoencoder(self):
-
-        ups_to_functionals = self.loader.load_temperature_functionals()
-
-        for ups in ups_to_functionals:
-            if ups == 'EBS11_SLASH_38'  or len(ups_to_functionals[ups]) < 50:
-                continue
-            if not os.path.isdir(r'./data/anom/'+ups):
-                os.mkdir(r'./data/anom/'+ups)
-
-            r'''
-            Before setting up the models,
-            we need to define train/test data.
-            To do this, we perform a simple split where we train on the 90% of the dataset
-            (which should represent normal operating conditions),
-            and test on the remaining parts of the dataset leading up to the eventual failure.
-            '''
-            data = ups_to_functionals[ups]
-            test_size = np.ceil(len(data)*.1).astype(int)
-
-            dataset_train = data[:-test_size]
-            dataset_test = data[-test_size:]
-
-            r'''
-            Scale the input variables of the model.
-
-            Standardize features by removing the mean and scaling to unit variance.
-            Centering and scaling happen independently on each feature by computing the relevant statistics on the samples in the training set.
-            Mean and standard deviation are then stored to be used on later data using the transform method.
-            Standardization of a dataset is a common requirement for many machine learning estimators:
-                they might behave badly if the individual features do not more or less look like standard normally distributed data (e.g. Gaussian with 0 mean and unit variance).
-            For instance many elements used in the objective function of a learning algorithm (such as the RBF kernel of Support Vector Machines or the L1 and L2 regularizers of linear models) assume that all features are centered around 0 and have variance in the same order.
-            If a feature has a variance that is orders of magnitude larger that others, it might dominate the objective function and make the estimator unable to learn from other features correctly as expected.
-            '''
-            scaler = preprocessing.StandardScaler()
-
-            X_train = pd.DataFrame(scaler.fit_transform(dataset_train),
-                                   columns=dataset_train.columns,
-                                   index=dataset_train.index).sample(frac=1)# Random shuffle training data
-
-            X_test = pd.DataFrame(scaler.transform(dataset_test),
-                                  columns=dataset_test.columns,
-                                  index=dataset_test.index)
-
-
-            #act_func = 'relu'
-            train = X_train.to_numpy()
-            test = X_test.to_numpy()
-            intermediate_dim = 8
-            batch_size = 64
-            latent_dim = 2
-            epochs = 150
-
-            def sampling(args):
-                """Reparameterization trick by sampling from an isotropic unit Gaussian.
-
-                # Arguments
-                    args (tensor): mean and log of variance of Q(z|X)
-
-                # Returns
-                    z (tensor): sampled latent vector
-                """
-
-                z_mean, z_log_var = args
-                batch = tf.shape(z_mean)[0]
-                dim = tf.shape(z_mean)[1]
-                # by default, random_normal has mean = 0 and std = 1.0
-                epsilon = tf.random.normal(shape=(batch, dim))
-                return z_mean + tf.math.exp(0.5 * z_log_var) * epsilon
-
-            # VAE model = encoder + decoder
-            # build encoder model
-            inputs = Input(shape=(train.shape[1],), name='encoder_input')
-            x = Dense(intermediate_dim, activation='relu')(inputs)
-            z_mean = Dense(latent_dim, name='z_mean')(x)
-            z_log_var = Dense(latent_dim, name='z_log_var')(x)
-
-            # use reparameterization trick to push the sampling out as input
-            # note that "output_shape" isn't necessary with the TensorFlow backend
-            z = Lambda(sampling, output_shape=(latent_dim,), name='z')([z_mean, z_log_var])
-
-            # instantiate encoder model
-            encoder = Model(inputs, [z_mean, z_log_var, z], name='encoder')
-
-            # build decoder model
-            latent_inputs = Input(shape=(latent_dim,), name='z_sampling')
-            x = Dense(intermediate_dim, activation='relu')(latent_inputs)
-            outputs = Dense(train.shape[1], activation='relu')(x)
-
-            # instantiate decoder model
-            decoder = Model(latent_inputs, outputs, name='decoder')
-
-            # instantiate VAE model
-            outputs = decoder(encoder(inputs)[2])
-            vae = Model(inputs, outputs, name='vae_mlp')
-
-
-            reconstruction_loss = mse(inputs, outputs)
-            reconstruction_loss *= train.shape[1]
-            kl_loss = 1 + z_log_var - tf.math.square(z_mean) - tf.math.exp(z_log_var)
-            kl_loss = tf.reduce_sum(kl_loss, axis=-1)
-            kl_loss *= -0.5
-            vae_loss = tf.reduce_mean(reconstruction_loss + kl_loss)
-            vae.add_loss(vae_loss)
-            vae.compile(optimizer='adam')
-            history = vae.fit(train,
-                    epochs=epochs,
-                    batch_size=batch_size,
-                  validation_split=0.05,
-                  verbose=0)
-
-
-            # Visualize training/validation loss
-            plt.plot(history.history['loss'], 'b', label='Training loss')
-            plt.plot(history.history['val_loss'], 'r', label='Validation loss')
-            plt.legend(loc='upper right')
-            plt.xlabel('Epochs')
-            plt.ylabel('Loss, [mse]')
-            ylim = max(max(history.history['loss']), max(history.history['val_loss']))
-            plt.ylim([0, ylim])
-            plt.savefig(r'./data/anom/'+ups+'/VAE_loss.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
-            plt.close()
-
-            r'''
-            Distribution of loss function in the training set:
-
-            By plotting the distribution of the calculated loss in the training set,
-            one can use this to identify a suitable threshold value for identifying an anomaly.
-            In doing this, one can make sure that this threshold is set above the “noise level”,
-            and that any flagged anomalies should be statistically significant above the noise background.
-            '''
-            X_pred = vae.predict(np.array(X_train))
-            X_pred = pd.DataFrame(X_pred,
-                                  columns=X_train.columns)
-            X_pred.index = X_train.index
-
-            scored = pd.DataFrame(index=X_train.index)
-            scored['Loss_mae'] = np.mean(np.abs(X_pred-X_train), axis=1)
-            plt.figure()
-            sns.distplot(scored['Loss_mae'],
-                         bins=50,
-                         kde=True,
-                         color='blue')
-            plt.xlim([0.0, max(scored['Loss_mae'])])
-            plt.savefig(r'./data/anom/'+ups+'/VAE_loss_dist.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
-            plt.close()
-
-            r'''
-            From the above loss distribution,
-            let us try a threshold based on one of the last quantiles for flagging an anomaly.
-            We can then calculate the loss in the test set, to check when the output crosses the anomaly threshold.
-            '''
-
-            threshold = scored['Loss_mae'].quantile(.95) + 1*(scored['Loss_mae'].quantile(.95) - scored['Loss_mae'].quantile(.05))
-
-            X_pred = vae.predict(np.array(X_test))
-            X_pred = pd.DataFrame(X_pred,
-                                  columns=X_test.columns)
-            X_pred.index = X_test.index
-
-            scored = pd.DataFrame(index=X_test.index)
-            scored['Loss_mae'] = np.mean(np.abs(X_pred-X_test), axis=1)
-            scored['Threshold'] = threshold
-            scored['Anomaly'] = scored['Loss_mae'] > scored['Threshold']
-
-
-
-            ymax = 100*max(scored['Loss_mae'])
-            ymin = 0.001*min(scored['Loss_mae'])
-            fig = scored.plot(logy=True, figsize=(30, 18), ylim=[ymin, ymax], color=['blue', 'red'])
-            fig.get_figure().savefig(r'./data/anom/'+ups+'/VAE_test_threshold.jpeg',
-                                     quality=95, optimize=True, progressive=True, format='jpeg')
-
-            plt.close('all')
-
-
-            r'''
-            We then calculate the same metrics also for the training set, and merge all data in a single dataframe.
-            '''
-            X_pred = vae.predict(np.array(X_test))
-            X_pred = pd.DataFrame(X_pred,
-                                  columns=X_test.columns)
-            X_pred.index = X_test.index
-
-            scored_test = pd.DataFrame(index=X_test.index)
-            scored_test['Loss_mae'] = np.mean(np.abs(X_pred-X_test), axis=1)
-            scored_test['Threshold'] = threshold
-            scored_test['Anomaly'] = scored_test['Loss_mae'] > scored_test['Threshold']
-
-
-
-            X_pred_train = vae.predict(np.array(X_train))
-            X_pred_train = pd.DataFrame(X_pred_train,
-                                        columns=X_train.columns)
-            X_pred_train.index = X_train.index
-
-            scored_train = pd.DataFrame(index=X_train.index)
-            scored_train['Loss_mae'] = np.mean(np.abs(X_pred_train-X_train), axis=1)
-            scored_train['Threshold'] = threshold
-            scored_train['Anomaly'] = scored_train['Loss_mae'] > scored_train['Threshold']
-
-            scored = pd.concat([scored_train, scored_test], sort=False)
-
-            r'''
-            Isolation forest prediction based on anomality detected by the autoencoder
-            '''
-            contamination = (scored.Anomaly == True).sum()/len(scored)
-
-            clf = IsolationForest(behaviour='new', n_estimators=500, max_samples='auto', contamination=contamination, \
-                                    max_features=1.0, bootstrap=True, n_jobs=-1, random_state=42, verbose=0)
-
-            clf.fit(scored.Loss_mae.to_numpy().reshape(-1, 1))
-
-            pred = clf.predict(scored.Loss_mae.to_numpy().reshape(-1, 1))
-            dct = {-1:threshold, 1:np.nan}
-            pred = [dct[k] for k in pred]
-
-            r'''
-            Results from Autoencoder model:
-            Having calculated the loss distribution and the anomaly threshold, we can visualize the model output in the time leading up to the bearing failure:
-            '''
-            scored.plot(logy=True, figsize=(30, 18), ylim=[1e-3, 1e3], color=['green', 'red'])
-            isolation_forest = plt.scatter(scored.index, pred, s=150, c='b', marker=".")
-            plt.legend((isolation_forest,), ('Isolation Forest',), scatterpoints=1, loc='upper right', ncol=1, fontsize=8)
-            plt.savefig(r'./data/anom/'+ups+'/VAE_full_threshold.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
-            plt.close('all')
-
-    def false_positive_detect(self, crit_seqs_path=r"C:\Users\logiusti\Lorenzo\PyWorkspace\scripts\Wrapper\data\critical_dates",
-                              anomalities_path=r'C:\Users\logiusti\Lorenzo\PyWorkspace\scripts\Wrapper\data\anom'):
-
-
-        ups_to_false_positive = dict()
-        def pick_the_peak(df):
-            r'''
-            We pick the time in which the loss is maximum in a t+-dt period.
-            '''
-            return df.loc[df['Loss_mae'] == max(df['Loss_mae'])]
-
-        os.chdir(anomalities_path)
-        for ups in os.listdir():
-            ups_to_false_positive[ups] = []
-            # read the critical sequences timestamps of each ups
-            try:
-                crit_seq = pd.to_datetime(pd.Series(pd.read_csv(crit_seqs_path+"\\"+ups+'_crit_seq_dates.csv', header=None)[0])).sort_values().reset_index(drop=True)
-            except FileNotFoundError:
-                crit_seq = pd.Series()
-            #read the anomaly alterts, we choose the LSTM denoising autoencore since it seems to have better performances.
-            anomalities = pd.read_csv("./"+ups+'/LSTM_autoencoder_distance.csv')
-            anomalities = anomalities.loc[anomalities['Anomaly'] == True] #use only values flagged as anomaly
-            anomalities['Time'] = pd.to_datetime(anomalities['Time'], format="%Y-%m-%d %H:%M:%S.%f")
-
-            if anomalities.Time.empty:
-                ups_to_false_positive[ups] = []
-                continue
-            #tim off, first 10% of the period should not be considered in the false positive count
-            dayoff = ((anomalities.Time.iloc[-1] - anomalities.Time.iloc[0]).days)*.1
-            #cut-off the DF
-            anomalities = anomalities.loc[anomalities['Time']  >= (pd.to_datetime(anomalities.Time.iloc[0], format="%Y-%m-%d") + pd.DateOffset(days=dayoff))]
-
-
-            #we want to group an entire period in which we've spotted an anomaly (7 days as upper bound)
-            anomalities['groups'] = (anomalities.Time.diff().fillna(pd.Timedelta(seconds=0))/np.timedelta64(7, 'D'))\
-                                            .gt(1).cumsum().add(1).astype(str)
-
-            anomalities.set_index('groups', drop=True, inplace=True)
-            danger = anomalities.groupby(level=0, group_keys=False).apply(pick_the_peak) #take the max of that period
-            danger['Time'] = danger['Time'].dt.date
-
-            #if nothing happens in the time(max[])+4days
-            for idx,row in danger.iterrows():
-                start = pd.to_datetime(row.Time, format="%Y-%m-%d")
-                end = start + pd.DateOffset(days=4)
-                if crit_seq.loc[(crit_seq >= start ) & (crit_seq <= end) ].empty and row['Loss_mae'] >= 1.5*row['Threshold']:
-                    print("Falso Positivo", ups, "\n", row)
-                    ups_to_false_positive[ups].append(row['Time'])
-        return ups_to_false_positive
-
-    def min_cost_transport(self, anomalities_path=r'C:\Users\logiusti\Lorenzo\PyWorkspace\scripts\Wrapper\data\anom'):
-        os.chdir(anomalities_path)
-        ups_to_dist = dict()
-        for ups in os.listdir():
-            df = pd.read_csv("./"+ups+'/LSTM_autoencoder_distance.csv')
-            df['Time'] = pd.to_datetime(df['Time'], format="%Y-%m-%d %H:%M:%S.%f")
-            df.sort_values(by='Time', inplace=True)
-            df.reset_index(drop=True, inplace=True)
-            test_size = np.ceil(len(df)*.5).astype(int)
-            train = df[:-test_size]
-            test = df[-test_size:]
-            wa, a = np.histogram(test['Loss_mae'], density=True)
-            wb, b = np.histogram(train['Loss_mae'], density=True)
-            ups_to_dist[ups] = wasserstein_distance(a,b)
-
-        return ups_to_dist
 r'''
 
 Summary:

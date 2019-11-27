@@ -12,16 +12,16 @@ import numpy as np
 import scipy.stats as ss
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import *
-from astropy.convolution import Gaussian1DKernel, convolve
+#from astropy.convolution import Gaussian1DKernel, convolve
 
-from sklearn import preprocessing
+#from sklearn import preprocessing
 
-import tensorflow as tf
-from tensorflow.keras.layers import Input, Dropout, Lambda, LeakyReLU
-from tensorflow.keras.layers import Dense, LSTM, RepeatVector, TimeDistributed, Bidirectional
-from tensorflow.keras.models import Model, Sequential
-from tensorflow.keras.losses import mse
-from tensorflow.keras.callbacks import EarlyStopping
+#import tensorflow as tf
+#from tensorflow.keras.layers import Input, Dropout, Lambda, LeakyReLU
+#from tensorflow.keras.layers import Dense, LSTM, RepeatVector, TimeDistributed, Bidirectional
+#from tensorflow.keras.models import Model, Sequential
+#from tensorflow.keras.losses import mse
+#from tensorflow.keras.callbacks import EarlyStopping
 
 
 class Simulator:
@@ -61,7 +61,7 @@ class Simulator:
         # Parameters of the mixture components
         norm_params = np.array([[2, 1],
                                 [5, 1],
-                                [25, 1]])
+                                [15, 1]])
         #n_components = norm_params.shape[0]
         # Weight of each component, in this case all of them are 1/3
         weights = [0.90, 0.099] #np.ones(n_components, dtype=np.float64) / 3.0
@@ -72,7 +72,13 @@ class Simulator:
         y = np.fromiter((ss.norm.rvs(*(norm_params[i])) for i in mixture_idx),
                            dtype=np.float64)
 
-        return cos+y
+        noisy_ts = cos+y
+        for i in range(len(noisy_ts)):
+            if (noisy_ts[i] >= noisy_ts[i-1]+7) and (i >= len(noisy_ts)*0.85):
+                for j in range(i+1, len(noisy_ts)):
+                    noisy_ts[j] = noisy_ts[j-1]+np.random.normal()
+                return noisy_ts, 1
+        return noisy_ts, 0
 
     def seasonal_decomposition(self, x, period):
         """Extracts the seasonal components of the signal x, according to period"""
@@ -139,7 +145,53 @@ def flatten(X):
     return(flattened_X)
 
 
+
+
+
+
+
+
+
+
+
+
 plt.style.use('seaborn')
+
+import random, string, os
+
+kkk = 0
+for i in range(500):
+    x = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(8))
+    s = Simulator()
+    t = s.generate_random_date_sequence("2013-12-12 14:52:35", "2019-09-12 12:56:04", 1500)
+    T, anomalous = s.generate_temps(1500)
+
+    kkk += anomalous
+
+    df = pd.DataFrame()
+    df['Value']    = T
+    df['Time']    = t
+    os.mkdir(r"C:\Users\logiusti\Lorenzo\Data\virtual\\"+x+"_"+str(anomalous)+"/")
+    df.to_csv(r"C:\Users\logiusti\Lorenzo\Data\virtual\\"+x+"_"+str(anomalous)+"/"+x+"_"+str(anomalous)+"_TBat.csv", index=False)
+
+
+
+
+
+o = 0
+i = 0
+for virt in os.listdir(r"C:\Users\logiusti\Lorenzo\Data\virtual"):
+    if virt.split("_")[1] == '1':
+        i += 1
+    else:
+        o += 1
+
+
+
+
+
+r"""
+
 s = Simulator()
 t = s.generate_random_date_sequence("2013-12-12 14:52:35", "2019-09-12 12:56:04", 1500)
 T = s.generate_temps(1500)
@@ -268,12 +320,12 @@ ymax = 100*max(scored['Loss_mae'])
 ymin = 0.001*min(scored['Loss_mae'])
 fig = scored.plot(logy=True, figsize=(15, 9), ylim=[ymin, ymax], color=['blue', 'red'])
 
-"""
+s = Simulator()
 df = pd.read_csv('simulated_data_paper.csv')
-df['T'] = df['T'] - s.automatic_seasonality_remover(df['T'].to_numpy())
+#df['T'] = df['T'] - s.automatic_seasonality_remover(df['T'].to_numpy())
 
-gauss_1D_kernel = Gaussian1DKernel(.7*np.std(df['T']))
-df['T'] = convolve(df['T'],gauss_1D_kernel)
+#gauss_1D_kernel = Gaussian1DKernel(.7*np.std(df['T']))
+#df['T'] = convolve(df['T'],gauss_1D_kernel)
 
 
 
@@ -282,30 +334,29 @@ df['T'] = convolve(df['T'],gauss_1D_kernel)
 
 
 plt.figure(figsize=(18,10))
-df.plot(subplots=True,  layout=(2,3), sharex=True, sharey=False, legend=False)
-[ax.legend(loc=1) for ax in plt.gcf().axes]
+#df.plot(subplots=True,  layout=(2,3), sharex=True, sharey=False, legend=False)
+#[ax.legend(loc=1) for ax in plt.gcf().axes]
+df['T'].plot()
 plt.tight_layout()
-#plt.savefig(r'err1.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+plt.savefig(r'temp.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
 plt.show()
 
 
 
-df['season'] = s.automatic_seasonality_remover(df['Temperature'].values)
-df['Noise'] = df['Temperature'] - df['season']
+df['season'] = s.automatic_seasonality_remover(df['T'].values)
+df['Noise'] = df['T'] - df['season']
 
 
-gauss_kernel = Gaussian1DKernel(df['Temperature'].std()**2)
-df['Filt'] =  convolve(df['Temperature'], gauss_kernel)
+gauss_kernel = Gaussian1DKernel(df['Noise'].std()**2)
+df['Filt'] =  convolve(df['Noie'], gauss_kernel)
 
-gauss_kernel = Gaussian1DKernel(df['Filt'].std()**2)
-df['Filts'] =  convolve(df['season'], gauss_kernel)
 
 
 plt.figure(figsize=(28,10))
 df.plot(subplots=True,  layout=(2,3), sharex=True, sharey=False, legend=False)
 [ax.legend(loc=1) for ax in plt.gcf().axes]
 plt.tight_layout()
-#plt.savefig(r'err1.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+plt.savefig(r'tempz.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
 plt.show()
 
 """
