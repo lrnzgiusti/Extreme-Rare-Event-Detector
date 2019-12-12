@@ -11,8 +11,8 @@ import numpy as np
 import pandas as pd
 from Utility import timeit
 import pickle
-from astropy.convolution import Gaussian1DKernel, convolve
-
+from astropy.convolution import Gaussian1DKernel
+from sklearn.preprocessing import MinMaxScaler
 class Loader:
     r"""
     Class which provides all the functionalities to load the data
@@ -184,11 +184,11 @@ class Loader:
             df_tmp['Time'] = pd.to_datetime(df_tmp['Time'], format="%Y-%m-%d %H:%M:%S.%f")
 
             #remove ouliers statically
-            df_tmp.drop(df_tmp[(df_tmp['Value'] <= 7.5) |
-                                (df_tmp['Value'] >= 100)].index, inplace=True)
+            df_tmp.drop(df_tmp[(df_tmp['Value'] <= 15) |
+                                (df_tmp['Value'] >= 60)].index, inplace=True)
 
             #sample for dim-red
-            df_tmp = df_tmp.sample(frac=0.003)
+            #df_tmp = df_tmp.sample(frac=0.003)
 
             #earlier events comes first
             df_tmp.sort_values(by=['Time'], inplace=True)
@@ -288,6 +288,50 @@ class Loader:
                 print("Best fit period: {}".format(best_period))
             return best_season
 
+
+        def estimate_best_std(param,a,b):
+
+            ups_temperature = param
+            def smoothness(y):
+                return (np.std(np.diff(y)))/(np.abs(np.mean(np.diff(y))))
+
+            a  = np.linspace(a, b, 600)#np.arange(1, 300, 0.2)#np.arange(a, b, 0.1)
+            jaccs = []
+            smooths = []
+            stddevs = []
+            for i in a:
+                gauss_kernel = Gaussian1DKernel(i).array
+                scl = MinMaxScaler((-1,1))
+                data = scl.fit_transform(ups_temperature.reshape(-1,1)).reshape(1,-1)[0]
+                data -= np.mean(data)
+                smoothed_data_gauss = np.convolve(data, gauss_kernel, mode='valid')
+
+                drop = min(len(data), len(gauss_kernel))  - 1
+
+                if drop != 0:
+                    data = data[drop//2: -(drop//2)]
+
+                data_thr = (np.mean(data)+2*np.std(data))
+                smooth_thr = (np.mean(smoothed_data_gauss)+2*np.std(smoothed_data_gauss))
+                out = np.where((data<=-data_thr) | (data>=data_thr))[0]
+                out1 = np.where((smoothed_data_gauss<=-smooth_thr) | (smoothed_data_gauss>=smooth_thr))[0]
+                stddevs.append(i)
+                smooths.append(smoothness(smoothed_data_gauss))
+                try:
+                    jaccs.append(len(set(out1).intersection(set(out)))/len(set(out1).union(set(out))))
+                except ZeroDivisionError:
+                    jaccs.append(0)
+            jaccs = np.array(jaccs)
+            if (jaccs == 0).all():
+                return np.std(ups_temperature)*6
+            smooths = np.array(smooths)
+            stddevs = np.array(stddevs)
+            #print(jaccs, smooths, stddevs)
+            if np.nanargmin(np.float64(smooths)/(jaccs)) == len(stddevs)-1:
+                return estimate_best_std(param, b, b+10)
+            return stddevs[np.nanargmin(np.float64(smooths)/(jaccs))]
+
+
         '''
         try:
             ups_to_temperature = self.__ups_to_temperature
@@ -297,36 +341,55 @@ class Loader:
         ups_to_temperature = self.load_temperatures()
         ups_to_functionals = {}
         for ups in ups_to_temperature:
+
             if len(ups_to_temperature[ups]['Temperature']) <= 11:
                 continue
+
             if remove_seasonals:
                 ups_to_temperature[ups]['Temperature'] = ups_to_temperature[ups]['Temperature']**2
                 ups_to_temperature[ups]['season'] = automatic_seasonality_remover(ups_to_temperature[ups]['Temperature'].values)
-                ups_to_temperature[ups]['Temperature'] = (ups_to_temperature[ups]['Temperature'] - ups_to_temperature[ups]['season'])**3
+                ups_to_temperature[ups]['Temperature'] = (ups_to_temperature[ups]['Temperature'] - ups_to_temperature[ups]['season'])
 
-            ups_temperature = ups_to_temperature[ups].Temperature
+            ups_temperature = np.array(ups_to_temperature[ups].Temperature)
 
-            #print(stdev, len(ups_temperature)*0.008)
-            #if stdev > len(ups_temperature)*0.008:
-            stdev = len(ups_temperature)*0.008 # 0.008 for upses, 0.01  for colls, 0.001 for  virtual (probably too much)
-            gauss_kernel = Gaussian1DKernel(stdev)
-            smoothed_data_gauss = convolve(ups_temperature, gauss_kernel)
-            filtered_temperature = smoothed_data_gauss
-            dTemperature = np.gradient(filtered_temperature, edge_order=2)#[:-2]
+
+            scl = MinMaxScaler((-1,1))
+            scaled_temperature = scl.fit_transform(ups_temperature.reshape(-1,1)).reshape(1,-1)[0]
+            scaled_temperature -= np.mean(scaled_temperature)
+            stdev = 1
+            if len(scaled_temperature) > 100:
+                first_prm =  len(scaled_temperature)*0.0005
+                stdev = estimate_best_std(scaled_temperature, first_prm, first_prm+10)
+                gauss_kernel = Gaussian1DKernel(stdev).array
+
+
+                filtered_temperature = np.convolve(scaled_temperature, gauss_kernel, mode='valid')
+
+                drop = min(len(scaled_temperature), len(gauss_kernel))  - 1
+            else:
+                filtered_temperature = scaled_temperature
+                drop = 0
+
+            print(ups, stdev, len(filtered_temperature))
+            if len(filtered_temperature) < 20:
+                continue
+            dTemperature = np.gradient(filtered_temperature, edge_order=2)
             energy_of_dTemperature = np.cumsum(dTemperature**2) #how much is changed the system over time
             signed_total_variation = np.cumsum(dTemperature**3) #how much is changed the system over time considering it's behavour
             dEnergy = np.gradient(energy_of_dTemperature, edge_order=2) #the speed in which the system is chagning
             dSTV = np.gradient(signed_total_variation, edge_order=2)
 
             ups_to_functionals[ups] = pd.DataFrame()
-            ups_to_functionals[ups]['T']    = filtered_temperature#[:-2]
+            ups_to_functionals[ups]['T']    = filtered_temperature
             ups_to_functionals[ups]['dT']   = dTemperature
             ups_to_functionals[ups]['EdT']  = energy_of_dTemperature
-            ups_to_functionals[ups]['STV']  = signed_total_variation
+            ups_to_functionals[ups]['STV']  = signed_total_variation**2
             ups_to_functionals[ups]['EdE']  = dEnergy
             ups_to_functionals[ups]['dSTV'] = dSTV
-            ups_to_functionals[ups].index = pd.to_datetime(ups_to_temperature[ups].Time, format="%Y.%m.%d %H:%M:%S.%f")#[:-2], format="%Y.%m.%d %H:%M:%S.%f")
-
+            if drop != 0:
+                ups_to_functionals[ups].index = pd.to_datetime(ups_to_temperature[ups].Time[drop//2: -(drop//2)], format="%Y.%m.%d %H:%M:%S.%f")#[:-2], format="%Y.%m.%d %H:%M:%S.%f")
+            else:
+                ups_to_functionals[ups].index = pd.to_datetime(ups_to_temperature[ups].Time, format="%Y.%m.%d %H:%M:%S.%f")#[:-2], format="%Y.%m.%d %H:%M:%S.%f")
             yield ups, ups_to_functionals[ups]
 
         return

@@ -20,7 +20,7 @@ from sklearn.ensemble import IsolationForest
 
 
 import tensorflow as tf
-from tensorflow.keras.layers import Input, Dropout, Lambda, LeakyReLU
+from tensorflow.keras.layers import Input, Lambda, LeakyReLU
 from tensorflow.keras.layers import Dense, LSTM, RepeatVector, TimeDistributed, Bidirectional
 from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.losses import mse
@@ -101,7 +101,7 @@ class Detector:
             i += 1
             if i % 20 == 0:
                 print(i)
-            if ups[0] == 'EBS11_SLASH_38':# or ups[0] not in ['ESS329_SLASH_7E', 'EBS2C06_SLASH_BL1', 'ESS328_SLASH_5E', 'EBS12_SLASH_33'  ,'EBS1_SLASH_56', 'EBS22_SLASH_A6', 'ESS103_SLASH_6R', 'ESS303_SLASH_2X']:
+            if ups[0] == 'EBS11_SLASH_38':# or ups[0] not in ['ESS329_SLASH_7E']: #
                 continue
             if not os.path.isdir(r'./data/anom/'+ups[0]):
                 os.mkdir(r'./data/anom/'+ups[0])
@@ -124,8 +124,6 @@ class Detector:
 
 
     def nonlinear_LSTM_autoencoder_detect(self, X_train, X_test, ups):
-
-            #act_func = 'relu'
 
             def temporalize(X, lookback):
                 output_X = []
@@ -172,13 +170,12 @@ class Detector:
             train = tmp[:-test_size]
             test = tmp[-test_size:]
 
-            corrupted_train = train.copy()
+            #corrupted_train = train.copy()
 
+            #random_rows_to_corrupt = np.random.randint(0, corrupted_train.shape[0], size=(int(corrupted_train.size * 0.05),))
+            #random_cols_to_corrupt = np.random.randint(0, corrupted_train.shape[1], size=(int(corrupted_train.size * 0.05),))
 
-            random_rows_to_corrupt = np.random.randint(0, corrupted_train.shape[0], size=(int(corrupted_train.size * 0.05),))
-            random_cols_to_corrupt = np.random.randint(0, corrupted_train.shape[1], size=(int(corrupted_train.size * 0.05),))
-
-            corrupted_train[random_rows_to_corrupt, random_cols_to_corrupt] = 0
+            #corrupted_train[random_rows_to_corrupt, random_cols_to_corrupt] = 0
 
 
             model = Sequential()
@@ -207,7 +204,10 @@ class Detector:
             #model.summary()
             # fit model
             es = EarlyStopping(monitor='val_loss', mode='min', min_delta=0.001, verbose=0, patience=15)
-            history = model.fit(train+np.random.normal(0,0.1), train , epochs=60, batch_size=32, verbose=1, steps_per_epoch=None, validation_split=0.01, callbacks=[es])
+            batch_size = int(np.floor(len(df)*0.03))
+            if batch_size == 0 :
+                batch_size = 1
+            history = model.fit(train+np.random.normal(0,0.1), train , epochs=150, batch_size=batch_size, verbose=1, steps_per_epoch=None, validation_split=0.05, callbacks=[es])
 
             plt.plot(history.history['loss'],
                                  'b',
@@ -232,9 +232,9 @@ class Detector:
             sns.distplot(scored_train['Loss_mae'],
                                      bins = 100,
                                      kde= True,
-                                    color = 'blue');
-            plt.xlim([0.0, max(scored_train['Loss_mae'])])
-            plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss_dist.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+                                    color = 'darkblue');
+            plt.xlim([min(scored_train['Loss_mae']), max(scored_train['Loss_mae'])])
+            plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss_dist_train.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
             plt.close()
 
             threshold = scored_train['Loss_mae'].quantile(.95) + 1*(scored_train['Loss_mae'].quantile(.95) - scored_train['Loss_mae'].quantile(.05))
@@ -246,6 +246,38 @@ class Detector:
             scored_test['Loss_mae'] = np.mean(flatten(np.abs(X_test_pred-test)), axis=1)
             scored_test['Threshold'] = threshold
             scored_test['Anomaly'] = scored_test['Loss_mae'] > scored_test['Threshold']
+
+
+            plt.figure()
+            sns.distplot(scored_test['Loss_mae'],
+                                     bins =35,
+                                     kde= True,
+                                    color = 'darkorange');
+            plt.xlim([min(scored_test['Loss_mae']), max(scored_test['Loss_mae'])])
+            plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss_dist_test.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+            plt.close()
+
+
+            plt.figure()
+            sns.distplot(scored_train['Loss_mae'],
+                                     bins = 150,
+                                     kde= True,
+                                    color = 'darkblue',
+                                    label='Train Density');
+            sns.distplot(scored_test['Loss_mae'],
+                                     bins = 35,
+                                     kde= True,
+                                    color = 'darkorange',
+                                    label='Test Density');
+
+            plt.axvline(x=threshold, alpha=0.88, color='black', linestyle='--', label='Threshold')
+            lb = min(threshold, min(scored_test['Loss_mae']), min(scored_train['Loss_mae']))
+            ub = max(threshold, max(scored_test['Loss_mae']), max(scored_train['Loss_mae']))
+            plt.xlim([ lb*1.1, ub*1.1 ])
+            plt.legend(loc="upper right")
+            plt.savefig(r'./data/anom/'+ups+'/LSTM_Autoencoder_loss_dist_overlap.jpeg', quality=95, optimize=True, progressive=True, format='jpeg')
+            plt.close()
+
 
             scored = pd.concat([scored_train, scored_test], sort=False)
 

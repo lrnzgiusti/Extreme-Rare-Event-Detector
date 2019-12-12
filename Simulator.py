@@ -159,36 +159,6 @@ plt.style.use('seaborn')
 
 import random, string, os
 
-kkk = 0
-for i in range(500):
-    x = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(8))
-    s = Simulator()
-    t = s.generate_random_date_sequence("2013-12-12 14:52:35", "2019-09-12 12:56:04", 1500)
-    T, anomalous = s.generate_temps(1500)
-
-    kkk += anomalous
-
-    df = pd.DataFrame()
-    df['Value']    = T
-    df['Time']    = t
-    os.mkdir(r"C:\Users\logiusti\Lorenzo\Data\virtual\\"+x+"_"+str(anomalous)+"/")
-    df.to_csv(r"C:\Users\logiusti\Lorenzo\Data\virtual\\"+x+"_"+str(anomalous)+"/"+x+"_"+str(anomalous)+"_TBat.csv", index=False)
-
-
-
-
-
-o = 0
-i = 0
-for virt in os.listdir(r"C:\Users\logiusti\Lorenzo\Data\virtual"):
-    if virt.split("_")[1] == '1':
-        i += 1
-    else:
-        o += 1
-
-
-
-
 
 r"""
 
